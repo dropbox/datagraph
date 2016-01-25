@@ -17,8 +17,11 @@ cabal-version:       >=1.10
 
 executable datagraph
   main-is:             Main.hs
-  -- other-modules:       
-  -- other-extensions:    
   build-depends:       base >=4.8 && <4.9
-  -- hs-source-dirs:      
-  default-language:    Haskell2010
+                     , graphql
+                     , wai
+                     , haxl
+                     , http-types
+                     , warp
+  hs-source-dirs: src
+  default-language: Haskell2010
