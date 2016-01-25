@@ -9,7 +9,7 @@ license:             Apache-2.0
 license-file:        LICENSE
 author:              Chad Austin
 maintainer:          chad@chadaustin.me
--- copyright:           
+copyright:           Copyright (c) 2016 Dropbox, Inc.
 category:            Database
 build-type:          Simple
 -- extra-source-files:  
@@ -17,6 +17,7 @@ cabal-version:       >=1.10
 
 executable datagraph
   main-is:             Main.hs
+  ghc-options: -Wall -fwarn-tabs
   build-depends:       base >=4.8 && <4.9
                      , graphql
                      , wai
@@ -24,5 +25,9 @@ executable datagraph
                      , http-types
                      , warp
                      , aeson
+                     , text
+                     , attoparsec
+                     , unordered-containers
+                     , bytestring
   hs-source-dirs: src
   default-language: Haskell2010
