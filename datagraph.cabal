@@ -23,5 +23,6 @@ executable datagraph
                      , haxl
                      , http-types
                      , warp
+                     , aeson
   hs-source-dirs: src
   default-language: Haskell2010
