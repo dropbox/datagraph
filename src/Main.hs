@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings, LambdaCase, GADTs, StandaloneDeriving, FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses, TypeFamilies #-}
+{-# LANGUAGE MultiParamTypeClasses, TypeFamilies, InstanceSigs, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Main where
 
@@ -21,6 +22,8 @@ import qualified Data.HashMap.Strict as HashMap
 import Data.IORef
 import Haxl.Prelude
 import Haxl.Core
+import Text.Printf
+import Data.Typeable
 
 type Name = Text
 
@@ -196,7 +199,7 @@ handleRequest server respond doc = do
 
   let AST.Node name [] [] selectionSet = query
 
-  env <- initEnv (stateSet UserRequestState stateEmpty) ()
+  env <- initEnv (stateSet NoStateE {-$ stateSet UserRequestState-} stateEmpty) ()
   output <- runHaxl env $ processSelectionSet (rootQuery server) selectionSet
 
   let response = HashMap.fromList [("data" :: Text, HashMap.fromList [(name, output)] )]
@@ -205,30 +208,76 @@ handleRequest server respond doc = do
     [("Content-Type", "application/json")]
     (JSON.encode response)
 
+
+
+
+
+
+
+
+
+data UserRequest a where
+    FetchUser :: UserID -> UserRequest User
+  deriving Typeable
+
+-- This function is necessary to resolve the GADT properly.  Otherwise you get insane errors like
+-- 'b0' is untouchable: https://ghc.haskell.org/trac/ghc/ticket/9223
+runUserRequest :: UserRequest a -> ResultVar a -> IO ()
+runUserRequest (FetchUser userId) var = putSuccess var $ User "ME!!"
+
+deriving instance Show (UserRequest a)
+deriving instance Eq (UserRequest a)
+
+instance DataSourceName UserRequest where
+    dataSourceName _ = "UserRequestDataSource"
+
+instance Show1 UserRequest where
+    show1 (FetchUser (UserID userID)) = printf "FetchUser(%s)" (Text.unpack userID)
+
+instance Hashable (UserRequest a) where
+    hashWithSalt salt (FetchUser userId) = hashWithSalt salt (0 :: Int, userId)
+
+instance StateKey UserRequest where
+    data State UserRequest = NoStateE
+
+instance DataSource () UserRequest where
+    fetch _ _ _ reqs = SyncFetch $ do
+        forM_ reqs $ \(BlockedFetch req var) -> do
+            runUserRequest req var
+
+
+
+
+
+
+
 newtype UserID = UserID Text
-        deriving (Show, Eq)
+        deriving (Show, Eq, Hashable)
 newtype RoomID = RoomID Text
-        deriving (Show, Eq)
+        deriving (Show, Eq, Hashable)
 newtype MessageID = MessageID Text
-        deriving (Show, Eq)
+        deriving (Show, Eq, Hashable)
 
 data User = User { userName :: Text }
      deriving (Show)
 data Room = Room
 data Message = Message
 
+{-
 data UserRequest a where
   FetchUser :: UserID -> UserRequest User
+-}
 
 --data RoomRequest a where
   --FetchRoom :: RoomID -> DataRequest Room
   --FetchMessage :: MessageID -> DataRequest Message
 
-deriving instance Show (UserRequest a)
 {-
+deriving instance Show (UserRequest a)
 deriving instance Typeable DataRequest
 -}
 
+{-
 instance Show1 UserRequest where show1 = show
 deriving instance Eq (UserRequest a)
 instance Hashable (UserRequest a) where
@@ -236,16 +285,23 @@ instance Hashable (UserRequest a) where
 
 instance StateKey UserRequest where
   data State UserRequest = UserRequestState
+  
 instance DataSourceName UserRequest where
   dataSourceName _ = "UserDataSource"
+-}
+
+{-
 instance DataSource () UserRequest where
+  fetch :: State UserRequest -> Flags -> () -> [BlockedFetch UserRequest] -> PerformFetch
   fetch UserRequestState _flags _userEnv reqs = SyncFetch $ do
-    forM_ reqs $ \(BlockedFetch req var) -> do
-      putSuccess var $ User "me!"
+    forM_ reqs $ \(BlockedFetch req var) -> case req of
+      FetchUser (UserID userID) -> putSuccess var $ User "me!"
+-}
 
 meHandler :: HashMap Text InputValue -> TheMonad KeyResponse
 meHandler _ = do
   let myUserID = UserID "ME"
+  --_ <- dataFetch (E "hi" "bye")
   user <- dataFetch (FetchUser myUserID)
   return $ ValueResponse $ RObject $ HashMap.fromList [("name", RScalar $ SString $ userName user)]
 
