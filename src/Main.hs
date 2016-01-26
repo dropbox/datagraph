@@ -1,9 +1,10 @@
 {-# LANGUAGE OverloadedStrings, LambdaCase, GADTs, StandaloneDeriving, FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses, TypeFamilies, InstanceSigs, GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables, RecordWildCards #-}
 
 module Main where
 
+import Data.Proxy
 import Debug.Trace
 import Network.Wai
 import Network.HTTP.Types (status200)
@@ -217,7 +218,7 @@ handleRequest server respond doc = do
 
   let AST.Node name [] [] selectionSet = query
 
-  env <- initEnv (stateSet NoStateE {-$ stateSet UserRequestState-} stateEmpty) ()
+  env <- initEnv (stateSet StarWarsState {-$ stateSet UserRequestState-} stateEmpty) ()
   output <- runHaxl env $ processSelectionSet (rootQuery server) selectionSet
 
   let response = HashMap.fromList [("data" :: Text, HashMap.fromList [(name, output)] )]
@@ -227,11 +228,128 @@ handleRequest server respond doc = do
     (JSON.encode response)
 
 
+-- GraphQL classes
+
+class GraphQLEnum a where
+  enumName :: Proxy a -> Text
+  enumDescription :: Proxy a -> Maybe Text
+  enumValues :: Proxy a -> [a]
+  renderValue :: a -> Text
+  renderDescription :: a -> Text
+  -- TODO: deprecation
 
 
+-- Star Wars Domain Types
 
+data EpisodeID = NewHope | Empire | Jedi
+  deriving (Eq, Show)
+instance Hashable EpisodeID where
+  hashWithSalt salt NewHope = hashWithSalt salt (0 :: Int)
+  hashWithSalt salt Empire = hashWithSalt salt (1 :: Int)
+  hashWithSalt salt Jedi = hashWithSalt salt (2 :: Int)
 
+newtype CharacterID = CharacterID Text
+  deriving (Eq, Show, Hashable, IsString)
 
+data CharacterType
+  = Human {- home planet -} (Maybe Text)
+  | Droid {- primary function -} Text
+  deriving (Eq, Show)
+
+data Character = Character
+  { cName :: Text
+  , cFriends :: [CharacterID]
+  , cAppearsIn :: [EpisodeID]
+  , cType :: CharacterType
+  }
+  deriving (Eq, Show)
+
+-- Star Wars Data
+
+starWarsCharacters :: HashMap CharacterID Character
+starWarsCharacters = HashMap.fromList
+  [ ("1000", Character
+      { cName = "Luke Skywalker"
+      , cFriends = [ "1002", "1003", "2000", "2001" ]
+      , cAppearsIn = [ NewHope, Empire, Jedi ]
+      , cType = Human $ Just "Tatooine"
+      })
+  , ("1001", Character
+      { cName = "Darth Vader"
+      , cFriends = [ "1004" ]
+      , cAppearsIn = [ NewHope, Empire, Jedi ]
+      , cType = Human $ Just "Tatooine"
+      })
+  , ("1002", Character
+      { cName = "Han Solo"
+      , cFriends = [ "1000", "1003", "2001" ]
+      , cAppearsIn = [ NewHope, Empire, Jedi ]
+      , cType = Human $ Just "Corellia"
+      })
+  , ("1003", Character
+      { cName = "Leia Organa"
+      , cFriends = [ "1000", "1002", "2000", "2001" ]
+      , cAppearsIn = [ NewHope, Empire, Jedi ]
+      , cType = Human $ Just "Alderaan"
+      })
+  , ("1004", Character
+      { cName = "Wilhuff Tarkin"
+      , cFriends = [ "1001" ]
+      , cAppearsIn = [ NewHope ]
+      , cType = Human Nothing
+      })
+  , ("2000", Character
+      { cName = "C-3PO"
+      , cFriends = [ "1000", "1002", "1003", "2001" ]
+      , cAppearsIn = [ NewHope, Empire, Jedi ]
+      , cType = Droid "Protocol"
+      })
+  , ("2001", Character
+      { cName = "R2-D2"
+      , cFriends = [ "1000", "1002", "1003" ]
+      , cAppearsIn = [ NewHope, Empire, Jedi ]
+      , cType = Droid "Astromech"
+      })
+  ]
+
+-- Star Wars Data Source
+
+data StarWarsRequest a where
+  FetchCharacter :: CharacterID -> StarWarsRequest Character
+deriving instance Eq (StarWarsRequest a)
+deriving instance Show (StarWarsRequest a)
+
+instance Hashable (StarWarsRequest a) where
+    hashWithSalt salt (FetchCharacter userId) = hashWithSalt salt (0 :: Int, userId)
+
+runStarWarsRequest :: StarWarsRequest a -> ResultVar a -> IO ()
+runStarWarsRequest (FetchCharacter characterID) var = do
+  case HashMap.lookup characterID starWarsCharacters of
+    Just c -> do
+      putSuccess var c
+    Nothing -> do
+      putFailure var $ userError "No such character"
+
+instance DataSourceName StarWarsRequest where
+  dataSourceName _ = "StarWarsRequest"
+
+instance StateKey StarWarsRequest where
+    data State StarWarsRequest = StarWarsState
+
+instance Show1 StarWarsRequest where
+    show1 (FetchCharacter (CharacterID characterID)) = printf "FetchCharacter(%s)" (Text.unpack characterID)
+
+instance DataSource () StarWarsRequest where
+    fetch _ _ _ reqs = SyncFetch $ do
+        putStrLn $ "do some star wars requests: " ++ show (length reqs)
+        forM_ reqs $ \(BlockedFetch req var) -> do
+            runStarWarsRequest req var
+
+newtype UserID = UserID Text
+        deriving (Show, Eq, Hashable, IsString)
+
+data User = User { userName :: Text }
+     deriving (Show)
 
 
 data UserRequest a where
@@ -264,6 +382,7 @@ instance StateKey UserRequest where
 
 instance DataSource () UserRequest where
     fetch _ _ _ reqs = SyncFetch $ do
+        putStrLn $ "do some requests: " ++ show (length reqs)
         forM_ reqs $ \(BlockedFetch req var) -> do
             runUserRequest req var
 
@@ -271,54 +390,6 @@ instance DataSource () UserRequest where
 
 
 
-
-
-newtype UserID = UserID Text
-        deriving (Show, Eq, Hashable, IsString)
-newtype RoomID = RoomID Text
-        deriving (Show, Eq, Hashable, IsString)
-newtype MessageID = MessageID Text
-        deriving (Show, Eq, Hashable, IsString)
-
-data User = User { userName :: Text }
-     deriving (Show)
-data Room = Room
-data Message = Message
-
-{-
-data UserRequest a where
-  FetchUser :: UserID -> UserRequest User
--}
-
---data RoomRequest a where
-  --FetchRoom :: RoomID -> DataRequest Room
-  --FetchMessage :: MessageID -> DataRequest Message
-
-{-
-deriving instance Show (UserRequest a)
-deriving instance Typeable DataRequest
--}
-
-{-
-instance Show1 UserRequest where show1 = show
-deriving instance Eq (UserRequest a)
-instance Hashable (UserRequest a) where
-  hashWithSalt salt (FetchUser u) = hashWithSalt salt (0::Int)
-
-instance StateKey UserRequest where
-  data State UserRequest = UserRequestState
-  
-instance DataSourceName UserRequest where
-  dataSourceName _ = "UserDataSource"
--}
-
-{-
-instance DataSource () UserRequest where
-  fetch :: State UserRequest -> Flags -> () -> [BlockedFetch UserRequest] -> PerformFetch
-  fetch UserRequestState _flags _userEnv reqs = SyncFetch $ do
-    forM_ reqs $ \(BlockedFetch req var) -> case req of
-      FetchUser (UserID userID) -> putSuccess var $ User "me!"
--}
 
 responseValueFromUser :: User -> ResponseValue
 responseValueFromUser (User name) = RObject $ HashMap.fromList
@@ -338,13 +409,39 @@ friendHandler args = do
   user <- dataFetch (FetchUser (UserID userID))
   return $ ValueResponse $ responseValueFromUser user
 
+responseValueFromCharacter :: Character -> ResponseValue
+responseValueFromCharacter Character{..} = RObject $ HashMap.fromList
+  [ ("name", RScalar $ SString $ cName)
+  ]
+
+heroHandler :: HashMap Text InputValue -> TheMonad KeyResponse
+heroHandler args = do
+  traceShowM $ show args
+  episode <- case HashMap.lookup "episode" args of
+    Just (IScalar (SEnum episode)) -> do
+      case episode of
+        "NEWHOPE" -> return NewHope
+        "EMPIRE" -> return Empire
+        "JEDI" -> return Jedi
+        _ -> fail "Unknown episode enum"
+    Nothing -> return NewHope
+
+  character <- if episode == Empire then
+    -- Luke is the hero of Episode V.
+    dataFetch $ FetchCharacter "1000"
+  else do
+    -- Artoo is the hero otherwise.
+    dataFetch $ FetchCharacter "2001"
+  return $ ValueResponse $ responseValueFromCharacter character
+
 app :: Application
 app request respond = do
   -- TODO: check the request URL
   -- TODO: check the request method (require POST)
 
   body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
-  let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
+  --let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
+  let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) }"
 
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
@@ -355,6 +452,7 @@ app request respond = do
   let rootQuery = NodeHandler $ HashMap.fromList
                   [ ("me", KeyHandler meHandler)
                   , ("friend", KeyHandler friendHandler)
+                  , ("hero", KeyHandler heroHandler)
                   ]
   let server = Server rootQuery
   handleRequest server respond queryDoc
