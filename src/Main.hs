@@ -4,6 +4,7 @@
 
 module Main where
 
+import Debug.Trace
 import Network.Wai
 import Network.HTTP.Types (status200)
 import Network.Wai.Handler.Warp (run)
@@ -130,6 +131,7 @@ data Scalar
      | SBoolean Bool
      | SString Text
      | SEnum Text -- unquoted on parse
+     deriving (Show)
 
 instance JSON.ToJSON Scalar where
   toJSON (SInt i) = JSON.toJSON i
@@ -143,6 +145,7 @@ data InputValue
      | IScalar Scalar
      | IList [InputValue]
      | IObject (HashMap Text InputValue)
+     deriving (Show)
 
 data ResponseValue
      = RNull
@@ -168,13 +171,28 @@ data Server = Server
               { rootQuery :: NodeHandler
               }
 
+decodeInputValue :: AST.Value -> InputValue
+decodeInputValue = \case
+  AST.ValueVariable _ -> error "TODO: variable lookup in environment"
+  AST.ValueInt i -> IScalar $ SInt i
+  AST.ValueFloat f -> IScalar $ SFloat f
+  AST.ValueBoolean f -> IScalar $ SBoolean f
+  AST.ValueString (AST.StringValue s) -> IScalar $ SString s
+  AST.ValueEnum s -> IScalar $ SEnum s
+  AST.ValueList (AST.ListValue ls) -> IList $ fmap decodeInputValue ls
+  AST.ValueObject (AST.ObjectValue fields) -> IObject $
+    HashMap.fromList [(name, decodeInputValue value) | AST.ObjectField name value <- fields]
+
+decodeArgument :: AST.Argument -> (Text, InputValue)
+decodeArgument (AST.Argument name value) = (name, decodeInputValue value)
+
 processSelectionSet :: NodeHandler -> AST.SelectionSet -> TheMonad (HashMap Text ResponseValue)
 processSelectionSet (NodeHandler keyHandlers) selectionSet = do
   fmap HashMap.fromList $ forM selectionSet $ \case
     AST.SelectionField (AST.Field alias name arguments directives innerSelectionSet) -> do
       let (Just (KeyHandler keyHandler)) = HashMap.lookup name keyHandlers
-      let arguments = HashMap.empty -- TODO
-      outputValue <- keyHandler arguments >>= \case
+      let args = HashMap.fromList $ fmap decodeArgument arguments
+      outputValue <- keyHandler args >>= \case
         NodeResponse handler -> do
           if null innerSelectionSet then do
             fail "Must select fields of node"
@@ -223,7 +241,11 @@ data UserRequest a where
 -- This function is necessary to resolve the GADT properly.  Otherwise you get insane errors like
 -- 'b0' is untouchable: https://ghc.haskell.org/trac/ghc/ticket/9223
 runUserRequest :: UserRequest a -> ResultVar a -> IO ()
-runUserRequest (FetchUser userId) var = putSuccess var $ User "ME!!"
+runUserRequest (FetchUser userId) var = do
+  if userId == "10" then
+    putSuccess var $ User "FRIEND!!"
+  else
+    putSuccess var $ User "ME!!"
 
 deriving instance Show (UserRequest a)
 deriving instance Eq (UserRequest a)
@@ -252,11 +274,11 @@ instance DataSource () UserRequest where
 
 
 newtype UserID = UserID Text
-        deriving (Show, Eq, Hashable)
+        deriving (Show, Eq, Hashable, IsString)
 newtype RoomID = RoomID Text
-        deriving (Show, Eq, Hashable)
+        deriving (Show, Eq, Hashable, IsString)
 newtype MessageID = MessageID Text
-        deriving (Show, Eq, Hashable)
+        deriving (Show, Eq, Hashable, IsString)
 
 data User = User { userName :: Text }
      deriving (Show)
@@ -298,12 +320,23 @@ instance DataSource () UserRequest where
       FetchUser (UserID userID) -> putSuccess var $ User "me!"
 -}
 
+responseValueFromUser :: User -> ResponseValue
+responseValueFromUser (User name) = RObject $ HashMap.fromList
+  [ ("name", RScalar $ SString $ name)
+  ]
+
 meHandler :: HashMap Text InputValue -> TheMonad KeyResponse
 meHandler _ = do
   let myUserID = UserID "ME"
-  --_ <- dataFetch (E "hi" "bye")
   user <- dataFetch (FetchUser myUserID)
-  return $ ValueResponse $ RObject $ HashMap.fromList [("name", RScalar $ SString $ userName user)]
+  return $ ValueResponse $ responseValueFromUser user
+
+friendHandler :: HashMap Text InputValue -> TheMonad KeyResponse
+friendHandler args = do
+  traceShowM $ show args
+  let (Just (IScalar (SString userID))) = HashMap.lookup "id" args
+  user <- dataFetch (FetchUser (UserID userID))
+  return $ ValueResponse $ responseValueFromUser user
 
 app :: Application
 app request respond = do
@@ -311,7 +344,7 @@ app request respond = do
   -- TODO: check the request method (require POST)
 
   body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
-  let body' = "query is_this_needed { me { name } }"
+  let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
 
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
@@ -321,6 +354,7 @@ app request respond = do
 
   let rootQuery = NodeHandler $ HashMap.fromList
                   [ ("me", KeyHandler meHandler)
+                  , ("friend", KeyHandler friendHandler)
                   ]
   let server = Server rootQuery
   handleRequest server respond queryDoc
