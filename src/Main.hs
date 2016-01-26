@@ -165,8 +165,7 @@ data Server = Server
 
 processSelectionSet :: NodeHandler -> AST.SelectionSet -> TheMonad (HashMap Text ResponseValue)
 processSelectionSet (NodeHandler keyHandlers) selectionSet = do
-  rv <- newIORef $ HashMap.empty
-  forM_ selectionSet $ \case
+  fmap HashMap.fromList $ forM selectionSet $ \case
     AST.SelectionField (AST.Field alias name arguments directives innerSelectionSet) -> do
       let (Just (KeyHandler keyHandler)) = HashMap.lookup name keyHandlers
       let arguments = HashMap.empty -- TODO
@@ -184,9 +183,8 @@ processSelectionSet (NodeHandler keyHandlers) selectionSet = do
             -- TODO: assert RObject
             let (RObject m) = value
             RObject <$> processSelectionSet (NodeHandler $ fmap (KeyHandler . const . return . ValueResponse) m) innerSelectionSet
-      modifyIORef rv $ HashMap.insert (if Text.null alias then name else alias) outputValue
-    _ -> error "unsupported selection"
-  readIORef rv
+      return (if Text.null alias then name else alias, outputValue)
+    _ -> fail "unsupported selection"
 
 handleRequest server respond doc = do
   -- TODO: bad bad bad
@@ -207,7 +205,7 @@ handleRequest server respond doc = do
 
 
 
-meHandler :: HashMap Text InputValue -> IO KeyResponse
+meHandler :: HashMap Text InputValue -> TheMonad KeyResponse
 meHandler _ = do
   return $ ValueResponse $ RObject $ HashMap.fromList [("name", RScalar $ SString "me!")]
 
