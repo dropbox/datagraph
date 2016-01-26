@@ -27,6 +27,9 @@ import Haxl.Core
 import Text.Printf
 import Data.Typeable
 
+import StarWarsModel
+import StarWarsData
+
 type Name = Text
 
 -- GraphQL schema
@@ -239,79 +242,6 @@ class GraphQLEnum a where
   -- TODO: deprecation
 
 
--- Star Wars Domain Types
-
-data EpisodeID = NewHope | Empire | Jedi
-  deriving (Eq, Show)
-instance Hashable EpisodeID where
-  hashWithSalt salt NewHope = hashWithSalt salt (0 :: Int)
-  hashWithSalt salt Empire = hashWithSalt salt (1 :: Int)
-  hashWithSalt salt Jedi = hashWithSalt salt (2 :: Int)
-
-newtype CharacterID = CharacterID Text
-  deriving (Eq, Show, Hashable, IsString)
-
-data CharacterType
-  = Human {- home planet -} (Maybe Text)
-  | Droid {- primary function -} Text
-  deriving (Eq, Show)
-
-data Character = Character
-  { cName :: Text
-  , cFriends :: [CharacterID]
-  , cAppearsIn :: [EpisodeID]
-  , cType :: CharacterType
-  }
-  deriving (Eq, Show)
-
--- Star Wars Data
-
-starWarsCharacters :: HashMap CharacterID Character
-starWarsCharacters = HashMap.fromList
-  [ ("1000", Character
-      { cName = "Luke Skywalker"
-      , cFriends = [ "1002", "1003", "2000", "2001" ]
-      , cAppearsIn = [ NewHope, Empire, Jedi ]
-      , cType = Human $ Just "Tatooine"
-      })
-  , ("1001", Character
-      { cName = "Darth Vader"
-      , cFriends = [ "1004" ]
-      , cAppearsIn = [ NewHope, Empire, Jedi ]
-      , cType = Human $ Just "Tatooine"
-      })
-  , ("1002", Character
-      { cName = "Han Solo"
-      , cFriends = [ "1000", "1003", "2001" ]
-      , cAppearsIn = [ NewHope, Empire, Jedi ]
-      , cType = Human $ Just "Corellia"
-      })
-  , ("1003", Character
-      { cName = "Leia Organa"
-      , cFriends = [ "1000", "1002", "2000", "2001" ]
-      , cAppearsIn = [ NewHope, Empire, Jedi ]
-      , cType = Human $ Just "Alderaan"
-      })
-  , ("1004", Character
-      { cName = "Wilhuff Tarkin"
-      , cFriends = [ "1001" ]
-      , cAppearsIn = [ NewHope ]
-      , cType = Human Nothing
-      })
-  , ("2000", Character
-      { cName = "C-3PO"
-      , cFriends = [ "1000", "1002", "1003", "2001" ]
-      , cAppearsIn = [ NewHope, Empire, Jedi ]
-      , cType = Droid "Protocol"
-      })
-  , ("2001", Character
-      { cName = "R2-D2"
-      , cFriends = [ "1000", "1002", "1003" ]
-      , cAppearsIn = [ NewHope, Empire, Jedi ]
-      , cType = Droid "Astromech"
-      })
-  ]
-
 -- Star Wars Data Source
 
 data StarWarsRequest a where
@@ -441,7 +371,7 @@ app request respond = do
 
   body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
   --let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
-  let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) }"
+  let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } }"
 
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
