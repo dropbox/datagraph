@@ -17,7 +17,8 @@ import Data.GraphQL.Parser (document)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HashMap
 import Data.IORef
-import Control.Monad (forM_)
+import Haxl.Prelude
+import Haxl.Core
 
 type Name = Text
 
@@ -152,15 +153,17 @@ instance JSON.ToJSON ResponseValue where
 
 -- introduce a sum type: is this a record containing deeper info or a value
 
+type TheMonad a = GenHaxl () a
+
 data KeyResponse = NodeResponse NodeHandler | ValueResponse ResponseValue
-data KeyHandler = KeyHandler (HashMap Text InputValue -> IO KeyResponse)
+data KeyHandler = KeyHandler (HashMap Text InputValue -> TheMonad KeyResponse)
 data NodeHandler = NodeHandler (HashMap Text KeyHandler)
 
 data Server = Server
               { rootQuery :: NodeHandler
               }
-              
-processSelectionSet :: NodeHandler -> AST.SelectionSet -> IO (HashMap Text ResponseValue)
+
+processSelectionSet :: NodeHandler -> AST.SelectionSet -> TheMonad (HashMap Text ResponseValue)
 processSelectionSet (NodeHandler keyHandlers) selectionSet = do
   rv <- newIORef $ HashMap.empty
   forM_ selectionSet $ \case
@@ -190,17 +193,20 @@ handleRequest server respond doc = do
   let (AST.Document defns) = doc
   let (query:_) = [node | AST.DefinitionOperation (AST.Query node) <- defns]
   putStrLn $ show query
-        
-  let AST.Node name [] [] selectionSet = query
-  
-  output <- processSelectionSet (rootQuery server) selectionSet
 
-  let response = HashMap.fromList [(name, output)]
+  let AST.Node name [] [] selectionSet = query
+
+  env <- initEnv stateEmpty ()
+  output <- runHaxl env $ processSelectionSet (rootQuery server) selectionSet
+
+  let response = HashMap.fromList [("data" :: Text, HashMap.fromList [(name, output)] )]
   respond $ responseLBS
     status200
     [("Content-Type", "application/json")]
     (JSON.encode response)
-    
+
+
+
 meHandler :: HashMap Text InputValue -> IO KeyResponse
 meHandler _ = do
   return $ ValueResponse $ RObject $ HashMap.fromList [("name", RScalar $ SString "me!")]
@@ -212,7 +218,7 @@ app request respond = do
 
   body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
   let body' = "query is_this_needed { me { name } }"
-  
+
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
       fail $ "Error parsing query: " ++ err

@@ -29,5 +29,6 @@ executable datagraph
                      , attoparsec
                      , unordered-containers
                      , bytestring
+                     , HTF
   hs-source-dirs: src
   default-language: Haskell2010
