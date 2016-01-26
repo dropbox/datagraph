@@ -5,7 +5,7 @@ module Main where
 import Network.Wai
 import Network.HTTP.Types (status200)
 import Network.Wai.Handler.Warp (run)
-import Data.Aeson
+import qualified Data.Aeson as JSON
 import Data.Int (Int32)
 import Data.Text.Encoding (decodeUtf8)
 import Data.Attoparsec.Text (parseOnly, endOfInput)
@@ -47,15 +47,15 @@ data Value
      | VObject (HashMap Text Main.Value)
      | VVar Name -- looked up in environment
 
-instance ToJSON Main.Value where
-  toJSON VNull = Null
-  toJSON (VInt i) = toJSON i
-  toJSON (VFloat f) = toJSON f
-  toJSON (VBoolean b) = toJSON b
-  toJSON (VString s) = toJSON s
-  toJSON (VEnum n) = toJSON n
-  toJSON (VList ls) = toJSON ls
-  toJSON (VObject o) = toJSON o
+instance JSON.ToJSON Main.Value where
+  toJSON VNull = JSON.Null
+  toJSON (VInt i) = JSON.toJSON i
+  toJSON (VFloat f) = JSON.toJSON f
+  toJSON (VBoolean b) = JSON.toJSON b
+  toJSON (VString s) = JSON.toJSON s
+  toJSON (VEnum n) = JSON.toJSON n
+  toJSON (VList ls) = JSON.toJSON ls
+  toJSON (VObject o) = JSON.toJSON o
   toJSON (VVar _) = error "Unresolved variable in JSON encoding"
 
 data QueryParameter = QueryParameter Name SchemaType
@@ -125,12 +125,12 @@ data Scalar
      | SString Text
      | SEnum Text -- unquoted on parse
 
-instance ToJSON Scalar where
-  toJSON (SInt i) = toJSON i
-  toJSON (SFloat f) = toJSON f
-  toJSON (SBoolean b) = toJSON b
-  toJSON (SString s) = toJSON s
-  toJSON (SEnum t) = toJSON t
+instance JSON.ToJSON Scalar where
+  toJSON (SInt i) = JSON.toJSON i
+  toJSON (SFloat f) = JSON.toJSON f
+  toJSON (SBoolean b) = JSON.toJSON b
+  toJSON (SString s) = JSON.toJSON s
+  toJSON (SEnum t) = JSON.toJSON t
 
 data InputValue
      = IVar Text
@@ -143,19 +143,17 @@ data ResponseValue
      | RScalar Scalar
      | RList [ResponseValue]
      | RObject (HashMap Text ResponseValue)
-     | RNode NodeHandler
 
-instance ToJSON ResponseValue where
-  toJSON RNull = Null
-  toJSON (RScalar s) = toJSON s
-  toJSON (RList l) = toJSON l
-  toJSON (RObject o) = toJSON o
-  -- TODO: a wart
-  toJSON (RNode _) = error "Cannot encode NodeHandler into JSON -- unresolved data"
+instance JSON.ToJSON ResponseValue where
+  toJSON RNull = JSON.Null
+  toJSON (RScalar s) = JSON.toJSON s
+  toJSON (RList l) = JSON.toJSON l
+  toJSON (RObject o) = JSON.toJSON o
 
 -- introduce a sum type: is this a record containing deeper info or a value
 
-data KeyHandler = KeyHandler (HashMap Text InputValue -> IO ResponseValue)
+data KeyResponse = NodeResponse NodeHandler | ValueResponse ResponseValue
+data KeyHandler = KeyHandler (HashMap Text InputValue -> IO KeyResponse)
 data NodeHandler = NodeHandler (HashMap Text KeyHandler)
 
 data Server = Server
@@ -169,7 +167,20 @@ processSelectionSet (NodeHandler keyHandlers) selectionSet = do
     AST.SelectionField (AST.Field alias name arguments directives innerSelectionSet) -> do
       let (Just (KeyHandler keyHandler)) = HashMap.lookup name keyHandlers
       let arguments = HashMap.empty -- TODO
-      outputValue <- keyHandler arguments
+      outputValue <- keyHandler arguments >>= \case
+        NodeResponse handler -> do
+          if null innerSelectionSet then do
+            fail "Must select fields of node"
+          else do
+            RObject <$> processSelectionSet handler innerSelectionSet
+        ValueResponse value -> do
+          if null innerSelectionSet then do
+            -- TODO: assert not RObject
+            return value
+          else do
+            -- TODO: assert RObject
+            let (RObject m) = value
+            RObject <$> processSelectionSet (NodeHandler $ fmap (KeyHandler . const . return . ValueResponse) m) innerSelectionSet
       modifyIORef rv $ HashMap.insert (if Text.null alias then name else alias) outputValue
     _ -> error "unsupported selection"
   readIORef rv
@@ -188,11 +199,11 @@ handleRequest server respond doc = do
   respond $ responseLBS
     status200
     [("Content-Type", "application/json")]
-    (encode response)
+    (JSON.encode response)
     
-meHandler :: HashMap Text InputValue -> IO ResponseValue
+meHandler :: HashMap Text InputValue -> IO KeyResponse
 meHandler _ = do
-  return $ RScalar $ SString "me!"
+  return $ ValueResponse $ RObject $ HashMap.fromList [("name", RScalar $ SString "me!")]
 
 app :: Application
 app request respond = do
@@ -200,7 +211,7 @@ app request respond = do
   -- TODO: check the request method (require POST)
 
   body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
-  let body' = "query is_this_needed { me }"
+  let body' = "query is_this_needed { me { name } }"
   
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
