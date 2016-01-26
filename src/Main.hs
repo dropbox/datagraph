@@ -1,4 +1,5 @@
-{-# LANGUAGE OverloadedStrings, LambdaCase #-}
+{-# LANGUAGE OverloadedStrings, LambdaCase, GADTs, StandaloneDeriving, FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses, TypeFamilies #-}
 
 module Main where
 
@@ -9,6 +10,7 @@ import qualified Data.Aeson as JSON
 import Data.Int (Int32)
 import Data.Text.Encoding (decodeUtf8)
 import Data.Attoparsec.Text (parseOnly, endOfInput)
+import Data.Hashable
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.ByteString.Lazy (toStrict)
@@ -194,7 +196,7 @@ handleRequest server respond doc = do
 
   let AST.Node name [] [] selectionSet = query
 
-  env <- initEnv stateEmpty ()
+  env <- initEnv (stateSet UserRequestState stateEmpty) ()
   output <- runHaxl env $ processSelectionSet (rootQuery server) selectionSet
 
   let response = HashMap.fromList [("data" :: Text, HashMap.fromList [(name, output)] )]
@@ -203,11 +205,49 @@ handleRequest server respond doc = do
     [("Content-Type", "application/json")]
     (JSON.encode response)
 
+newtype UserID = UserID Text
+        deriving (Show, Eq)
+newtype RoomID = RoomID Text
+        deriving (Show, Eq)
+newtype MessageID = MessageID Text
+        deriving (Show, Eq)
 
+data User = User { userName :: Text }
+     deriving (Show)
+data Room = Room
+data Message = Message
+
+data UserRequest a where
+  FetchUser :: UserID -> UserRequest User
+
+--data RoomRequest a where
+  --FetchRoom :: RoomID -> DataRequest Room
+  --FetchMessage :: MessageID -> DataRequest Message
+
+deriving instance Show (UserRequest a)
+{-
+deriving instance Typeable DataRequest
+-}
+
+instance Show1 UserRequest where show1 = show
+deriving instance Eq (UserRequest a)
+instance Hashable (UserRequest a) where
+  hashWithSalt salt (FetchUser u) = hashWithSalt salt (0::Int)
+
+instance StateKey UserRequest where
+  data State UserRequest = UserRequestState
+instance DataSourceName UserRequest where
+  dataSourceName _ = "UserDataSource"
+instance DataSource () UserRequest where
+  fetch UserRequestState _flags _userEnv reqs = SyncFetch $ do
+    forM_ reqs $ \(BlockedFetch req var) -> do
+      putSuccess var $ User "me!"
 
 meHandler :: HashMap Text InputValue -> TheMonad KeyResponse
 meHandler _ = do
-  return $ ValueResponse $ RObject $ HashMap.fromList [("name", RScalar $ SString "me!")]
+  let myUserID = UserID "ME"
+  user <- dataFetch (FetchUser myUserID)
+  return $ ValueResponse $ RObject $ HashMap.fromList [("name", RScalar $ SString $ userName user)]
 
 app :: Application
 app request respond = do
