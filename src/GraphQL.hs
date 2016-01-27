@@ -8,6 +8,7 @@ import qualified Data.Aeson as JSON
 import Data.HashMap.Strict (HashMap)
 import qualified Data.Text as Text
 import qualified Data.HashMap.Strict as HashMap
+import Data.Proxy
 
 data Scalar
      = SInt Int32
@@ -49,3 +50,12 @@ lookupArgument args argName = do
       Right y -> return $ Just y
       Left err -> fail $ "Error decoding argument " ++ Text.unpack argName ++ ": " ++ err
     Nothing -> return Nothing
+
+-- TODO: actually use this
+class GraphQLEnum a where
+  enumName :: Proxy a -> Text
+  enumDescription :: Proxy a -> Maybe Text
+  enumValues :: Proxy a -> [a]
+  renderValue :: a -> Text
+  renderDescription :: a -> Text
+  -- TODO: deprecation

@@ -4,7 +4,6 @@
 
 module Main where
 
-import Data.Proxy
 --import Debug.Trace
 import Network.Wai
 import Network.HTTP.Types (status200)
@@ -13,7 +12,6 @@ import qualified Data.Aeson as JSON
 import Data.Int (Int32)
 import Data.Text.Encoding (decodeUtf8)
 import Data.Attoparsec.Text (parseOnly, endOfInput)
-import Data.Hashable
 import qualified Data.Text as Text
 import Data.ByteString.Lazy (toStrict)
 import qualified Data.GraphQL.AST as AST
@@ -22,11 +20,10 @@ import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HashMap
 import Haxl.Prelude
 import Haxl.Core
-import Text.Printf
-import Data.Typeable
 import Data.Traversable (for)
 
 import GraphQL
+import DropboxDataSource
 import StarWarsModel
 import StarWarsDataSource
 
@@ -210,65 +207,6 @@ handleRequest server respond doc = do
     status200
     [("Content-Type", "application/json")]
     (JSON.encode response)
-
-
--- GraphQL classes
-
-class GraphQLEnum a where
-  enumName :: Proxy a -> Text
-  enumDescription :: Proxy a -> Maybe Text
-  enumValues :: Proxy a -> [a]
-  renderValue :: a -> Text
-  renderDescription :: a -> Text
-  -- TODO: deprecation
-
-
--- Star Wars Data Source
-
-newtype UserID = UserID Text
-        deriving (Show, Eq, Hashable, IsString)
-
-data User = User { userName :: Text }
-     deriving (Show)
-
-
-data UserRequest a where
-    FetchUser :: UserID -> UserRequest User
-  deriving Typeable
-
--- This function is necessary to resolve the GADT properly.  Otherwise you get insane errors like
--- 'b0' is untouchable: https://ghc.haskell.org/trac/ghc/ticket/9223
-runUserRequest :: UserRequest a -> ResultVar a -> IO ()
-runUserRequest (FetchUser userId) var = do
-  if userId == "10" then
-    putSuccess var $ User "FRIEND!!"
-  else
-    putSuccess var $ User "ME!!"
-
-deriving instance Show (UserRequest a)
-deriving instance Eq (UserRequest a)
-
-instance DataSourceName UserRequest where
-    dataSourceName _ = "UserRequestDataSource"
-
-instance Show1 UserRequest where
-    show1 (FetchUser (UserID userID)) = printf "FetchUser(%s)" (Text.unpack userID)
-
-instance Hashable (UserRequest a) where
-    hashWithSalt salt (FetchUser userId) = hashWithSalt salt (0 :: Int, userId)
-
-instance StateKey UserRequest where
-    data State UserRequest = NoStateE
-
-instance DataSource () UserRequest where
-    fetch _ _ _ reqs = SyncFetch $ do
-        putStrLn $ "do some requests: " ++ show (length reqs)
-        forM_ reqs $ \(BlockedFetch req var) -> do
-            runUserRequest req var
-
-
-
-
 
 
 responseValueFromUser :: User -> ResponseValue
