@@ -141,10 +141,10 @@ instance JSON.ToJSON ResponseValue where
 
 -- introduce a sum type: is this a record containing deeper info or a value
 
-type TheMonad a = GenHaxl () a
+type GraphQLHandler a = GenHaxl () a
 
 data KeyResponse = NodeResponse NodeHandler | ValueResponse ResponseValue
-data KeyHandler = KeyHandler (HashMap Text InputValue -> TheMonad KeyResponse)
+data KeyHandler = KeyHandler (HashMap Text InputValue -> GraphQLHandler KeyResponse)
 data NodeHandler = NodeHandler (HashMap Text KeyHandler)
 
 data Server = Server
@@ -166,7 +166,7 @@ decodeInputValue = \case
 decodeArgument :: AST.Argument -> (Text, InputValue)
 decodeArgument (AST.Argument name value) = (name, decodeInputValue value)
 
-processSelectionSet :: NodeHandler -> AST.SelectionSet -> TheMonad (HashMap Text ResponseValue)
+processSelectionSet :: NodeHandler -> AST.SelectionSet -> GraphQLHandler (HashMap Text ResponseValue)
 processSelectionSet (NodeHandler keyHandlers) selectionSet = do
   fmap HashMap.fromList $ forM selectionSet $ \case
     AST.SelectionField (AST.Field alias name arguments _directives innerSelectionSet) -> do
@@ -214,13 +214,13 @@ responseValueFromUser (User name) = RObject $ HashMap.fromList
   [ ("name", RScalar $ SString $ name)
   ]
 
-meHandler :: HashMap Text InputValue -> TheMonad KeyResponse
+meHandler :: HashMap Text InputValue -> GraphQLHandler KeyResponse
 meHandler _ = do
   let myUserID = UserID "ME"
   user <- dataFetch (FetchUser myUserID)
   return $ ValueResponse $ responseValueFromUser user
 
-friendHandler :: HashMap Text InputValue -> TheMonad KeyResponse
+friendHandler :: HashMap Text InputValue -> GraphQLHandler KeyResponse
 friendHandler args = do
   let (Just (IScalar (SString userID))) = HashMap.lookup "id" args
   user <- dataFetch (FetchUser (UserID userID))
@@ -237,7 +237,7 @@ responseValueFromEpisode Episode{..} = RObject $ HashMap.fromList
   , ("releaseYear", RScalar $ SInt $ fromInteger $ toInteger $ eReleaseYear)
   ]
 
-heroHandler :: ResolverArguments -> TheMonad KeyResponse
+heroHandler :: ResolverArguments -> GraphQLHandler KeyResponse
 heroHandler args = do
   episodeID <- lookupArgument args "episode" >>= \case
     Just x -> return x
@@ -246,7 +246,7 @@ heroHandler args = do
   character <- dataFetch $ FetchCharacter $ eHero episode
   return $ ValueResponse $ responseValueFromCharacter character
 
-episodeHandler :: ResolverArguments -> TheMonad KeyResponse
+episodeHandler :: ResolverArguments -> GraphQLHandler KeyResponse
 episodeHandler args = do
   episodeID <- requireArgument args "id"
   episode <- dataFetch $ FetchEpisode episodeID
