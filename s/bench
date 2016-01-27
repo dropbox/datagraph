@@ -1,0 +1,4 @@
+#!/bin/bash
+cd $(cd "$(dirname "$0")"; pwd)/..
+
+wrk -s bench.lua http://localhost:8080/graphql

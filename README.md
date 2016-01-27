@@ -24,7 +24,6 @@ An experimental project to explore what a GraphQL server with optimal IO concurr
 - nullability
 - input coercion
 - eliminate as much haxl / graphql boilerplate as possible
-- redis backend
 - benchmark read qps and latency
 - errors (overall envelope: {data: {<query>: <response>}, errors: [...]}
 - query tests from https://github.com/graphql/graphql-js/blob/master/src/__tests__/starWarsQueryTests.js
