@@ -8,6 +8,7 @@ import Data.Hashable (Hashable(..))
 import Data.String (IsString)
 import GraphQL
 import Data.Aeson (FromJSON(..), Value(..), (.:), (.:?))
+import Control.Applicative ((<|>))
 
 -- Episode ID
 
@@ -75,8 +76,6 @@ instance FromJSON Character where
     cName <- o .: "name"
     cFriends <- o .: "friends"
     cAppearsIn <- o .: "appearsIn"
-    cType <- o .:? "homePlanet" >>= \case
-      Just homePlanet -> return $ Human homePlanet
-      Nothing -> Droid <$> o .: "primaryFunction"
+    cType <- (Human <$> o .: "homePlanet") <|> (Droid <$> o .: "primaryFunction")
     return Character{..}
   parseJSON _ = fail "Character must be an Object"

@@ -17,7 +17,7 @@ cabal-version:       >=1.10
 
 executable datagraph
   main-is:             Main.hs
-  ghc-options: -Wall -threaded -O2
+  ghc-options: -Wall -threaded -O2 -rtsopts -with-rtsopts=-N
   build-depends:       base >=4.8 && <4.9
                      , graphql
                      , wai

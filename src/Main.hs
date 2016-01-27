@@ -189,13 +189,14 @@ processSelectionSet (NodeHandler keyHandlers) selectionSet = do
       return (if Text.null alias then name else alias, outputValue)
     _ -> fail "unsupported selection"
 
-handleRequest :: Server -> Env () -> (Response -> IO b) -> AST.Document -> IO b
-handleRequest server requestEnv respond doc = do
+handleRequest :: Server -> StateStore -> (Response -> IO b) -> AST.Document -> IO b
+handleRequest server stateStore respond doc = do
   -- TODO: bad bad bad
   let (AST.Document defns) = doc
   let queries = [node | AST.DefinitionOperation (AST.Query node) <- defns]
   --putStrLn $ show queries
 
+  requestEnv <- initEnv stateStore ()
   outputs <- runHaxl requestEnv $ do
     for queries $ \(AST.Node name [] [] selectionSet) -> do
       output <- processSelectionSet (rootQuery server) selectionSet
@@ -251,8 +252,8 @@ episodeHandler args = do
   episode <- dataFetch $ FetchEpisode episodeID
   return $ ValueResponse $ responseValueFromEpisode episode
 
-app :: Env () -> Application
-app requestEnv request respond = do
+app :: StateStore -> Application
+app stateStore request respond = do
   -- TODO: check the request URL
   -- TODO: check the request method (require POST)
 
@@ -273,13 +274,12 @@ app requestEnv request respond = do
                   , ("episode", KeyHandler episodeHandler)
                   ]
   let server = Server rootQuery
-  handleRequest server requestEnv respond queryDoc
+  handleRequest server stateStore respond queryDoc
 
 main :: IO ()
 main = do
   putStrLn $ "http://localhost:8080/"
 
   conn <- openConnection
-  requestEnv <- initEnv (stateSet conn {-$ stateSet UserRequestState-} stateEmpty) ()
-
-  run 8080 $ app requestEnv
+  let stateStore = stateSet conn {-$ stateSet UserRequestState-} stateEmpty
+  run 8080 $ app stateStore

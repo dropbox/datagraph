@@ -8,7 +8,8 @@ import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import qualified Data.HashMap.Strict as HashMap
 import Haxl.Core
-import Control.Monad (forM_)
+import Control.Monad (void, forM_, forM)
+import Data.Traversable (sequence)
 import Database.Redis
 import Data.ByteString (ByteString)
 import Data.Aeson as JSON
@@ -48,21 +49,19 @@ readRedisValue k = do
     Right (Just bs) -> return $ JSON.decode $ fromStrict bs
     _ -> return Nothing
 
--- a little scary that Redis is MonadIO.  If it weren't, we could just
--- return Redis (IO ())
-runStarWarsRequest :: StarWarsRequest a -> ResultVar a -> Redis ()
+runStarWarsRequest :: StarWarsRequest a -> ResultVar a -> Redis (IO ())
 runStarWarsRequest (FetchCharacter characterID) var = do
   readRedisValue characterID >>= \case
     Just c -> do
-      liftIO $ putSuccess var c
+      return $ putSuccess var c
     Nothing -> do
-      liftIO $ putFailure var $ userError "No such character or failed to decode"
+      return $ putFailure var $ userError "No such character or failed to decode"
 runStarWarsRequest (FetchEpisode episodeID) var = do
   readRedisValue episodeID >>= \case
     Just e -> do
-      liftIO $ putSuccess var e
+      return $ putSuccess var e
     Nothing -> do
-      liftIO $ putFailure var $ userError "No such episode or failed to decode"
+      return $ putFailure var $ userError "No such episode or failed to decode"
 
 {-
   case HashMap.lookup characterID starWarsCharacters of
@@ -90,10 +89,11 @@ instance Show1 StarWarsRequest where
 
 instance DataSource () StarWarsRequest where
   fetch (StarWarsState conn) _ _ reqs = SyncFetch $ do
-    putStrLn $ "fetch star wars batch of size " ++ show (length reqs) ++ ": " ++ show [show1 req | BlockedFetch req _var <- reqs]
-    runRedis conn $ do
-      forM_ reqs $ \(BlockedFetch req var) -> do
+    --putStrLn $ "fetch star wars batch of size " ++ show (length reqs) ++ ": " ++ show [show1 req | BlockedFetch req _var <- reqs]
+    actions <- runRedis conn $ do
+      forM reqs $ \(BlockedFetch req var) -> do
         runStarWarsRequest req var
+    void $ sequence actions
 
 openConnection :: IO (State StarWarsRequest)
 openConnection = do
