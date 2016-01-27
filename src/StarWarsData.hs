@@ -57,19 +57,16 @@ starWarsEpisodes = HashMap.fromList
   [ (NewHope, Episode
       { eName = "Star Wars Episode IV: A New Hope"
       , eReleaseYear = 1977
+      , eHero = "2001"
       })
   , (Empire, Episode
       { eName = "Star Wars Episode V: The Empire Strikes Back"
       , eReleaseYear = 1980
+      , eHero = "1000"
       })
-  , (NewHope, Episode
+  , (Jedi, Episode
       { eName = "Star Wars Episode VI: Return of the Jedi"
       , eReleaseYear = 1983
+      , eHero = "2001"
       })
   ]
-
--- TODO: move this into the episode database, replacing calls to this with calls
--- to eHero <$> getEpisode
-getHero :: EpisodeID -> IO CharacterID
-getHero Empire = return "1002" -- Luke is hero of Episode V.
-getHero _ = return "2001" -- R2-D2 is hero of everything else.

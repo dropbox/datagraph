@@ -1,15 +1,25 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, OverloadedStrings #-}
 
 module StarWarsModel where
 
+import qualified Data.Text as Text
 import Data.Text (Text)
 import Data.Hashable (Hashable(..))
 import Data.String (IsString)
+import GraphQL
 
 -- Episode ID
 
 data EpisodeID = NewHope | Empire | Jedi
   deriving (Eq, Show)
+
+instance GraphQLArgument EpisodeID where
+  decodeInputArgument (IScalar (SEnum episode)) = case episode of
+    "NEWHOPE" -> return NewHope
+    "EMPIRE" -> return Empire
+    "JEDI" -> return Jedi
+    _ -> Left $ "Unknown episode enum: " ++ Text.unpack episode
+  decodeInputArgument _ = Left $ "invalid episode ID"
 
 instance Hashable EpisodeID where
   hashWithSalt salt NewHope = hashWithSalt salt (0 :: Int)
@@ -21,6 +31,7 @@ instance Hashable EpisodeID where
 data Episode = Episode
   { eName :: Text
   , eReleaseYear :: Int
+  , eHero :: CharacterID
   }
   deriving (Eq, Show)
 

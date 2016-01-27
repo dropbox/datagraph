@@ -36,7 +36,7 @@ runStarWarsRequest (FetchEpisode episodeID) var = do
     Just e -> do
       putSuccess var e
     Nothing -> do
-      putFailure var $ userError "No such episode"
+      putFailure var $ userError $ "No such episode: " ++ show episodeID
 
 instance DataSourceName StarWarsRequest where
   dataSourceName _ = "StarWarsRequest"
@@ -50,6 +50,6 @@ instance Show1 StarWarsRequest where
 
 instance DataSource () StarWarsRequest where
   fetch _ _ _ reqs = SyncFetch $ do
-    putStrLn $ "do some star wars requests: " ++ show (length reqs)
+    putStrLn $ "fetch star wars batch of size " ++ show (length reqs) ++ ": " ++ show [show1 req | BlockedFetch req _var <- reqs]
     forM_ reqs $ \(BlockedFetch req var) -> do
       runStarWarsRequest req var

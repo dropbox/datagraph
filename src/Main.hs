@@ -28,6 +28,7 @@ import Text.Printf
 import Data.Typeable
 import Data.Traversable (for)
 
+import GraphQL
 import StarWarsModel
 import StarWarsData
 import StarWarsDataSource
@@ -131,27 +132,6 @@ data ResponseValue
      | VVar Name -- looked up in environment
 -}
 
-data Scalar
-     = SInt Int32
-     | SFloat Double
-     | SBoolean Bool
-     | SString Text
-     | SEnum Text -- unquoted on parse
-     deriving (Show)
-
-instance JSON.ToJSON Scalar where
-  toJSON (SInt i) = JSON.toJSON i
-  toJSON (SFloat f) = JSON.toJSON f
-  toJSON (SBoolean b) = JSON.toJSON b
-  toJSON (SString s) = JSON.toJSON s
-  toJSON (SEnum t) = JSON.toJSON t
-
-data InputValue
-     = IVar Text
-     | IScalar Scalar
-     | IList [InputValue]
-     | IObject (HashMap Text InputValue)
-     deriving (Show)
 
 data ResponseValue
      = RNull
@@ -306,7 +286,6 @@ meHandler _ = do
 
 friendHandler :: HashMap Text InputValue -> TheMonad KeyResponse
 friendHandler args = do
-  traceShowM args
   let (Just (IScalar (SString userID))) = HashMap.lookup "id" args
   user <- dataFetch (FetchUser (UserID userID))
   return $ ValueResponse $ responseValueFromUser user
@@ -322,37 +301,36 @@ responseValueFromEpisode Episode{..} = RObject $ HashMap.fromList
   , ("releaseYear", RScalar $ SInt $ fromInteger $ toInteger $ eReleaseYear)
   ]
 
-heroHandler :: HashMap Text InputValue -> TheMonad KeyResponse
-heroHandler args = do
-  traceShowM args
-  episode <- case HashMap.lookup "episode" args of
-    Just (IScalar (SEnum episode)) -> do
-      case episode of
-        "NEWHOPE" -> return NewHope
-        "EMPIRE" -> return Empire
-        "JEDI" -> return Jedi
-        _ -> fail "Unknown episode enum"
-    Nothing -> return NewHope
+-- GraphQL shit
 
-  character <- if episode == Empire then
-    -- Luke is the hero of Episode V.
-    dataFetch $ FetchCharacter "1000"
-  else do
-    -- Artoo is the hero otherwise.
-    dataFetch $ FetchCharacter "2001"
+type ResolverArguments = HashMap Text InputValue
+
+requireArgument :: (Monad m, GraphQLArgument a) => ResolverArguments -> Text -> m a
+requireArgument args argName = do
+  lookupArgument args argName >>= \case
+    Just x -> return x
+    Nothing -> fail $ "Required argument missing: " ++ Text.unpack argName
+
+lookupArgument :: (Monad m, GraphQLArgument a) => ResolverArguments -> Text -> m (Maybe a)
+lookupArgument args argName = do
+  case HashMap.lookup argName args of
+    Just x -> case decodeInputArgument x of
+      Right y -> return $ Just y
+      Left err -> fail $ "Error decoding argument " ++ Text.unpack argName ++ ": " ++ err
+    Nothing -> return Nothing
+
+heroHandler :: ResolverArguments -> TheMonad KeyResponse
+heroHandler args = do
+  episodeID <- lookupArgument args "episode" >>= \case
+    Just x -> return x
+    Nothing -> return NewHope
+  episode <- dataFetch $ FetchEpisode episodeID
+  character <- dataFetch $ FetchCharacter $ eHero episode
   return $ ValueResponse $ responseValueFromCharacter character
 
-episodeHandler :: HashMap Text InputValue -> TheMonad KeyResponse
+episodeHandler :: ResolverArguments -> TheMonad KeyResponse
 episodeHandler args = do
-  traceShowM args
-  episodeID <- case HashMap.lookup "id" args of
-    Just (IScalar (SEnum episode)) -> do
-      case episode of
-        "NEWHOPE" -> return NewHope
-        "EMPIRE" -> return Empire
-        "JEDI" -> return Jedi
-        _ -> fail "Unknown episode enum"
-    Nothing -> fail "Required episode type"
+  episodeID <- requireArgument args "id"
   episode <- dataFetch $ FetchEpisode episodeID
   return $ ValueResponse $ responseValueFromEpisode episode
 
