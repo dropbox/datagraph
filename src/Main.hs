@@ -26,9 +26,11 @@ import Haxl.Prelude
 import Haxl.Core
 import Text.Printf
 import Data.Typeable
+import Data.Traversable (for)
 
 import StarWarsModel
 import StarWarsData
+import StarWarsDataSource
 
 type Name = Text
 
@@ -216,15 +218,16 @@ processSelectionSet (NodeHandler keyHandlers) selectionSet = do
 handleRequest server respond doc = do
   -- TODO: bad bad bad
   let (AST.Document defns) = doc
-  let (query:_) = [node | AST.DefinitionOperation (AST.Query node) <- defns]
-  putStrLn $ show query
-
-  let AST.Node name [] [] selectionSet = query
+  let queries = [node | AST.DefinitionOperation (AST.Query node) <- defns]
+  putStrLn $ show queries
 
   env <- initEnv (stateSet StarWarsState {-$ stateSet UserRequestState-} stateEmpty) ()
-  output <- runHaxl env $ processSelectionSet (rootQuery server) selectionSet
+  outputs <- runHaxl env $ do
+    for queries $ \(AST.Node name [] [] selectionSet) -> do
+      output <- processSelectionSet (rootQuery server) selectionSet
+      return (name, output)
 
-  let response = HashMap.fromList [("data" :: Text, HashMap.fromList [(name, output)] )]
+  let response = HashMap.fromList [("data" :: Text, HashMap.fromList outputs )]
   respond $ responseLBS
     status200
     [("Content-Type", "application/json")]
@@ -243,37 +246,6 @@ class GraphQLEnum a where
 
 
 -- Star Wars Data Source
-
-data StarWarsRequest a where
-  FetchCharacter :: CharacterID -> StarWarsRequest Character
-deriving instance Eq (StarWarsRequest a)
-deriving instance Show (StarWarsRequest a)
-
-instance Hashable (StarWarsRequest a) where
-    hashWithSalt salt (FetchCharacter userId) = hashWithSalt salt (0 :: Int, userId)
-
-runStarWarsRequest :: StarWarsRequest a -> ResultVar a -> IO ()
-runStarWarsRequest (FetchCharacter characterID) var = do
-  case HashMap.lookup characterID starWarsCharacters of
-    Just c -> do
-      putSuccess var c
-    Nothing -> do
-      putFailure var $ userError "No such character"
-
-instance DataSourceName StarWarsRequest where
-  dataSourceName _ = "StarWarsRequest"
-
-instance StateKey StarWarsRequest where
-    data State StarWarsRequest = StarWarsState
-
-instance Show1 StarWarsRequest where
-    show1 (FetchCharacter (CharacterID characterID)) = printf "FetchCharacter(%s)" (Text.unpack characterID)
-
-instance DataSource () StarWarsRequest where
-    fetch _ _ _ reqs = SyncFetch $ do
-        putStrLn $ "do some star wars requests: " ++ show (length reqs)
-        forM_ reqs $ \(BlockedFetch req var) -> do
-            runStarWarsRequest req var
 
 newtype UserID = UserID Text
         deriving (Show, Eq, Hashable, IsString)
@@ -334,7 +306,7 @@ meHandler _ = do
 
 friendHandler :: HashMap Text InputValue -> TheMonad KeyResponse
 friendHandler args = do
-  traceShowM $ show args
+  traceShowM args
   let (Just (IScalar (SString userID))) = HashMap.lookup "id" args
   user <- dataFetch (FetchUser (UserID userID))
   return $ ValueResponse $ responseValueFromUser user
@@ -344,9 +316,15 @@ responseValueFromCharacter Character{..} = RObject $ HashMap.fromList
   [ ("name", RScalar $ SString $ cName)
   ]
 
+responseValueFromEpisode :: Episode -> ResponseValue
+responseValueFromEpisode Episode{..} = RObject $ HashMap.fromList
+  [ ("name", RScalar $ SString $ eName)
+  , ("releaseYear", RScalar $ SInt $ fromInteger $ toInteger $ eReleaseYear)
+  ]
+
 heroHandler :: HashMap Text InputValue -> TheMonad KeyResponse
 heroHandler args = do
-  traceShowM $ show args
+  traceShowM args
   episode <- case HashMap.lookup "episode" args of
     Just (IScalar (SEnum episode)) -> do
       case episode of
@@ -364,6 +342,20 @@ heroHandler args = do
     dataFetch $ FetchCharacter "2001"
   return $ ValueResponse $ responseValueFromCharacter character
 
+episodeHandler :: HashMap Text InputValue -> TheMonad KeyResponse
+episodeHandler args = do
+  traceShowM args
+  episodeID <- case HashMap.lookup "id" args of
+    Just (IScalar (SEnum episode)) -> do
+      case episode of
+        "NEWHOPE" -> return NewHope
+        "EMPIRE" -> return Empire
+        "JEDI" -> return Jedi
+        _ -> fail "Unknown episode enum"
+    Nothing -> fail "Required episode type"
+  episode <- dataFetch $ FetchEpisode episodeID
+  return $ ValueResponse $ responseValueFromEpisode episode
+
 app :: Application
 app request respond = do
   -- TODO: check the request URL
@@ -371,7 +363,7 @@ app request respond = do
 
   body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
   --let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
-  let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } }"
+  let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } } query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
 
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
@@ -383,6 +375,7 @@ app request respond = do
                   [ ("me", KeyHandler meHandler)
                   , ("friend", KeyHandler friendHandler)
                   , ("hero", KeyHandler heroHandler)
+                  , ("episode", KeyHandler episodeHandler)
                   ]
   let server = Server rootQuery
   handleRequest server respond queryDoc
