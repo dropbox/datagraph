@@ -18,6 +18,13 @@ An experimental project to explore what a GraphQL server with optimal IO concurr
 - The GraphQL spec: https://facebook.github.io/graphql/
 - Star Wars schema stuff: https://github.com/graphql/graphql-js/tree/master/src/__tests__
 
+# WORKING
+
+- queries
+- redis backend
+- backend IO batching
+- benchmarks
+
 # TODO
 
 - mutations, incl. sequencing
