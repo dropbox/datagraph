@@ -1,4 +1,4 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, OverloadedStrings #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, OverloadedStrings, LambdaCase, RecordWildCards #-}
 
 module StarWarsModel where
 
@@ -7,11 +7,18 @@ import Data.Text (Text)
 import Data.Hashable (Hashable(..))
 import Data.String (IsString)
 import GraphQL
+import Data.Aeson (FromJSON(..), Value(..), (.:), (.:?))
 
 -- Episode ID
 
 data EpisodeID = NewHope | Empire | Jedi
   deriving (Eq, Show)
+
+instance FromJSON EpisodeID where
+  parseJSON (Number 4) = return NewHope
+  parseJSON (Number 5) = return Empire
+  parseJSON (Number 6) = return Jedi
+  parseJSON _ = fail "Unknown EpisodeID"
 
 instance GraphQLArgument EpisodeID where
   decodeInputArgument (IScalar (SEnum episode)) = case episode of
@@ -35,10 +42,18 @@ data Episode = Episode
   }
   deriving (Eq, Show)
 
+instance FromJSON Episode where
+  parseJSON (Object o) = do
+    eName <- o .: "name"
+    eReleaseYear <- o .: "releaseYear"
+    eHero <- o .: "hero"
+    return Episode{..}
+  parseJSON _ = fail "Episode must be an Object"
+
 -- CharacterID
 
 newtype CharacterID = CharacterID Text
-  deriving (Eq, Show, Hashable, IsString)
+  deriving (Eq, Show, Hashable, IsString, FromJSON)
 
 -- Character
 
@@ -54,3 +69,14 @@ data Character = Character
   , cType :: CharacterType
   }
   deriving (Eq, Show)
+
+instance FromJSON Character where
+  parseJSON (Object o) = do
+    cName <- o .: "name"
+    cFriends <- o .: "friends"
+    cAppearsIn <- o .: "appearsIn"
+    cType <- o .:? "homePlanet" >>= \case
+      Just homePlanet -> return $ Human homePlanet
+      Nothing -> Droid <$> o .: "primaryFunction"
+    return Character{..}
+  parseJSON _ = fail "Character must be an Object"

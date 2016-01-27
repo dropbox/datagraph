@@ -196,7 +196,8 @@ handleRequest server respond doc = do
   let queries = [node | AST.DefinitionOperation (AST.Query node) <- defns]
   putStrLn $ show queries
 
-  requestEnv <- initEnv (stateSet StarWarsState {-$ stateSet UserRequestState-} stateEmpty) ()
+  conn <- openConnection
+  requestEnv <- initEnv (stateSet conn {-$ stateSet UserRequestState-} stateEmpty) ()
   outputs <- runHaxl requestEnv $ do
     for queries $ \(AST.Node name [] [] selectionSet) -> do
       output <- processSelectionSet (rootQuery server) selectionSet
