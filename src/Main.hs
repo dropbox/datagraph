@@ -5,7 +5,7 @@
 module Main where
 
 import Data.Proxy
-import Debug.Trace
+--import Debug.Trace
 import Network.Wai
 import Network.HTTP.Types (status200)
 import Network.Wai.Handler.Warp (run)
@@ -14,14 +14,12 @@ import Data.Int (Int32)
 import Data.Text.Encoding (decodeUtf8)
 import Data.Attoparsec.Text (parseOnly, endOfInput)
 import Data.Hashable
-import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.ByteString.Lazy (toStrict)
 import qualified Data.GraphQL.AST as AST
 import Data.GraphQL.Parser (document)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HashMap
-import Data.IORef
 import Haxl.Prelude
 import Haxl.Core
 import Text.Printf
@@ -30,7 +28,6 @@ import Data.Traversable (for)
 
 import GraphQL
 import StarWarsModel
-import StarWarsData
 import StarWarsDataSource
 
 type Name = Text
@@ -175,7 +172,7 @@ decodeArgument (AST.Argument name value) = (name, decodeInputValue value)
 processSelectionSet :: NodeHandler -> AST.SelectionSet -> TheMonad (HashMap Text ResponseValue)
 processSelectionSet (NodeHandler keyHandlers) selectionSet = do
   fmap HashMap.fromList $ forM selectionSet $ \case
-    AST.SelectionField (AST.Field alias name arguments directives innerSelectionSet) -> do
+    AST.SelectionField (AST.Field alias name arguments _directives innerSelectionSet) -> do
       let (Just (KeyHandler keyHandler)) = HashMap.lookup name keyHandlers
       let args = HashMap.fromList $ fmap decodeArgument arguments
       outputValue <- keyHandler args >>= \case
@@ -195,14 +192,15 @@ processSelectionSet (NodeHandler keyHandlers) selectionSet = do
       return (if Text.null alias then name else alias, outputValue)
     _ -> fail "unsupported selection"
 
+handleRequest :: Server -> (Response -> IO b) -> AST.Document -> IO b
 handleRequest server respond doc = do
   -- TODO: bad bad bad
   let (AST.Document defns) = doc
   let queries = [node | AST.DefinitionOperation (AST.Query node) <- defns]
   putStrLn $ show queries
 
-  env <- initEnv (stateSet StarWarsState {-$ stateSet UserRequestState-} stateEmpty) ()
-  outputs <- runHaxl env $ do
+  requestEnv <- initEnv (stateSet StarWarsState {-$ stateSet UserRequestState-} stateEmpty) ()
+  outputs <- runHaxl requestEnv $ do
     for queries $ \(AST.Node name [] [] selectionSet) -> do
       output <- processSelectionSet (rootQuery server) selectionSet
       return (name, output)
@@ -301,24 +299,6 @@ responseValueFromEpisode Episode{..} = RObject $ HashMap.fromList
   , ("releaseYear", RScalar $ SInt $ fromInteger $ toInteger $ eReleaseYear)
   ]
 
--- GraphQL shit
-
-type ResolverArguments = HashMap Text InputValue
-
-requireArgument :: (Monad m, GraphQLArgument a) => ResolverArguments -> Text -> m a
-requireArgument args argName = do
-  lookupArgument args argName >>= \case
-    Just x -> return x
-    Nothing -> fail $ "Required argument missing: " ++ Text.unpack argName
-
-lookupArgument :: (Monad m, GraphQLArgument a) => ResolverArguments -> Text -> m (Maybe a)
-lookupArgument args argName = do
-  case HashMap.lookup argName args of
-    Just x -> case decodeInputArgument x of
-      Right y -> return $ Just y
-      Left err -> fail $ "Error decoding argument " ++ Text.unpack argName ++ ": " ++ err
-    Nothing -> return Nothing
-
 heroHandler :: ResolverArguments -> TheMonad KeyResponse
 heroHandler args = do
   episodeID <- lookupArgument args "episode" >>= \case
@@ -339,7 +319,7 @@ app request respond = do
   -- TODO: check the request URL
   -- TODO: check the request method (require POST)
 
-  body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
+  _body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
   --let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
   let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } } query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
 

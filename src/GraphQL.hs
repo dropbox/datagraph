@@ -1,9 +1,13 @@
+{-# LANGUAGE LambdaCase #-}
+
 module GraphQL where
 
 import Data.Int (Int32)
 import Data.Text (Text)
 import qualified Data.Aeson as JSON
 import Data.HashMap.Strict (HashMap)
+import qualified Data.Text as Text
+import qualified Data.HashMap.Strict as HashMap
 
 data Scalar
      = SInt Int32
@@ -29,3 +33,19 @@ data InputValue
 
 class GraphQLArgument a where
   decodeInputArgument :: InputValue -> Either String a
+
+type ResolverArguments = HashMap Text InputValue
+
+requireArgument :: (Monad m, GraphQLArgument a) => ResolverArguments -> Text -> m a
+requireArgument args argName = do
+  lookupArgument args argName >>= \case
+    Just x -> return x
+    Nothing -> fail $ "Required argument missing: " ++ Text.unpack argName
+
+lookupArgument :: (Monad m, GraphQLArgument a) => ResolverArguments -> Text -> m (Maybe a)
+lookupArgument args argName = do
+  case HashMap.lookup argName args of
+    Just x -> case decodeInputArgument x of
+      Right y -> return $ Just y
+      Left err -> fail $ "Error decoding argument " ++ Text.unpack argName ++ ": " ++ err
+    Nothing -> return Nothing
