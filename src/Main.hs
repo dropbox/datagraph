@@ -213,7 +213,20 @@ instance KnownValue Int where
   encodeKnownValue = RScalar . SInt . fromInteger . toInteger
 
 knownValue :: KnownValue v => v -> ValueResolver
+-- TODO: assert _args is empty
 knownValue v _args = return $ encodeKnownValue v
+
+class GraphQLID id where
+  fetchByID :: id -> GraphQLHandler ResolvedValue
+
+instance GraphQLID UserID where
+  fetchByID userID = do
+    user <- dataFetch (FetchUser userID)
+    return $ RObject $ responseValueFromUser user
+
+idHandler :: GraphQLID id => id -> ValueResolver
+-- TODO: assert _args is empty
+idHandler i _args = fetchByID i
 
 responseValueFromUser :: User -> ObjectResolver
 responseValueFromUser (User name) = HashMap.fromList
@@ -221,16 +234,12 @@ responseValueFromUser (User name) = HashMap.fromList
   ]
 
 meHandler :: ValueResolver
-meHandler _ = do
-  let myUserID = UserID "ME"
-  user <- dataFetch (FetchUser myUserID)
-  return $ RObject $ responseValueFromUser user
+meHandler = idHandler $ UserID "ME"
 
 friendHandler :: ValueResolver
 friendHandler args = do
   let (Just (IScalar (SString userID))) = HashMap.lookup "id" args
-  user <- dataFetch (FetchUser (UserID userID))
-  return $ RObject $ responseValueFromUser user
+  fetchByID $ UserID userID
 
 responseValueFromCharacter :: Character -> ResolvedValue
 responseValueFromCharacter Character{..} = RObject $ HashMap.fromList
