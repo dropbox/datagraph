@@ -4,7 +4,7 @@
 
 module Main where
 
---import Debug.Trace
+import Debug.Trace
 import Network.Wai
 import Network.HTTP.Types (status200)
 import Network.Wai.Handler.Warp (run)
@@ -21,6 +21,7 @@ import qualified Data.HashMap.Strict as HashMap
 import Haxl.Prelude
 import Haxl.Core
 import Data.Traversable (for)
+import Control.Monad (when)
 
 import GraphQL
 import DropboxDataSource
@@ -118,38 +119,32 @@ type QueryRoot {
 }
 -}
 
-{-
-data ResponseValue
-     = RVNull
-     | VList [Main.Value]
-     | VObject (HashMap Text Main.Value)
-     | VVar Name -- looked up in environment
--}
-
-
-data ResponseValue
-     = RNull
-     | RScalar Scalar
-     | RList [ResponseValue]
-     | RObject (HashMap Text ResponseValue)
-
-instance JSON.ToJSON ResponseValue where
-  toJSON RNull = JSON.Null
-  toJSON (RScalar s) = JSON.toJSON s
-  toJSON (RList l) = JSON.toJSON l
-  toJSON (RObject o) = JSON.toJSON o
-
--- introduce a sum type: is this a record containing deeper info or a value
-
 type GraphQLHandler a = GenHaxl () a
 
-data KeyResponse = NodeResponse NodeHandler | ValueResponse ResponseValue
-data KeyHandler = KeyHandler (HashMap Text InputValue -> GraphQLHandler KeyResponse)
-data NodeHandler = NodeHandler (HashMap Text KeyHandler)
+data ResolvedValue
+  = RNull
+  | RScalar Scalar
+  | RList [ValueResolver]
+  | RObject (HashMap Text ValueResolver)
+type ValueResolver = ResolverArguments -> GraphQLHandler ResolvedValue
 
+data FullyResolvedValue
+  = FNull
+  | FScalar Scalar
+  | FList [FullyResolvedValue]
+  | FObject (HashMap Text FullyResolvedValue)
+
+instance JSON.ToJSON FullyResolvedValue where
+  toJSON FNull = JSON.Null
+  toJSON (FScalar s) = JSON.toJSON s
+  toJSON (FList l) = JSON.toJSON l
+  toJSON (FObject o) = JSON.toJSON o
+
+-- merge with ResolvedValue / RObject?
+type ObjectResolver = HashMap Text ValueResolver
 data Server = Server
-              { rootQuery :: NodeHandler
-              }
+  { rootQuery :: ObjectResolver
+  }
 
 decodeInputValue :: AST.Value -> InputValue
 decodeInputValue = \case
@@ -166,26 +161,26 @@ decodeInputValue = \case
 decodeArgument :: AST.Argument -> (Text, InputValue)
 decodeArgument (AST.Argument name value) = (name, decodeInputValue value)
 
-processSelectionSet :: NodeHandler -> AST.SelectionSet -> GraphQLHandler (HashMap Text ResponseValue)
-processSelectionSet (NodeHandler keyHandlers) selectionSet = do
+processSelectionSet :: ObjectResolver -> AST.SelectionSet -> GraphQLHandler (HashMap Text FullyResolvedValue)
+processSelectionSet objectResolver selectionSet = do
   fmap HashMap.fromList $ forM selectionSet $ \case
     AST.SelectionField (AST.Field alias name arguments _directives innerSelectionSet) -> do
-      let (Just (KeyHandler keyHandler)) = HashMap.lookup name keyHandlers
+      traceShowM $ name
+      valueResolver <- case HashMap.lookup name objectResolver of
+        Just vr -> return vr
+        Nothing -> fail $ "Requested unknown field: " ++ Text.unpack name
+
       let args = HashMap.fromList $ fmap decodeArgument arguments
-      outputValue <- keyHandler args >>= \case
-        NodeResponse handler -> do
+      outputValue <- valueResolver args >>= \case
+        RNull -> return FNull
+        RScalar s -> return $ FScalar s
+        RList ls -> do
+          fail "TODO: lists don't work"
+        RObject o -> do
           if null innerSelectionSet then do
-            fail "Must select fields of node"
+            fail "Must select fields out of object"
           else do
-            RObject <$> processSelectionSet handler innerSelectionSet
-        ValueResponse value -> do
-          if null innerSelectionSet then do
-            -- TODO: assert not RObject
-            return value
-          else do
-            -- TODO: assert RObject
-            let (RObject m) = value
-            RObject <$> processSelectionSet (NodeHandler $ fmap (KeyHandler . const . return . ValueResponse) m) innerSelectionSet
+            FObject <$> processSelectionSet o innerSelectionSet
       return (if Text.null alias then name else alias, outputValue)
     _ -> fail "unsupported selection"
 
@@ -208,49 +203,79 @@ handleRequest server stateStore respond doc = do
     [("Content-Type", "application/json")]
     (JSON.encode response)
 
+class KnownValue v where
+  encodeKnownValue :: v -> ResolvedValue
 
-responseValueFromUser :: User -> ResponseValue
-responseValueFromUser (User name) = RObject $ HashMap.fromList
-  [ ("name", RScalar $ SString $ name)
+instance KnownValue Text where
+  encodeKnownValue = RScalar . SString
+
+instance KnownValue Int where
+  encodeKnownValue = RScalar . SInt . fromInteger . toInteger
+
+knownValue :: KnownValue v => v -> ValueResolver
+knownValue v _args = return $ encodeKnownValue v
+
+responseValueFromUser :: User -> ObjectResolver
+responseValueFromUser (User name) = HashMap.fromList
+  [ ("name", knownValue name)
   ]
 
-meHandler :: HashMap Text InputValue -> GraphQLHandler KeyResponse
+meHandler :: ValueResolver
 meHandler _ = do
   let myUserID = UserID "ME"
   user <- dataFetch (FetchUser myUserID)
-  return $ ValueResponse $ responseValueFromUser user
+  return $ RObject $ responseValueFromUser user
 
-friendHandler :: HashMap Text InputValue -> GraphQLHandler KeyResponse
+friendHandler :: ValueResolver
 friendHandler args = do
   let (Just (IScalar (SString userID))) = HashMap.lookup "id" args
   user <- dataFetch (FetchUser (UserID userID))
-  return $ ValueResponse $ responseValueFromUser user
+  return $ RObject $ responseValueFromUser user
 
-responseValueFromCharacter :: Character -> ResponseValue
+responseValueFromCharacter :: Character -> ResolvedValue
 responseValueFromCharacter Character{..} = RObject $ HashMap.fromList
-  [ ("name", RScalar $ SString $ cName)
+  [ ("name", knownValue cName)
   ]
 
-responseValueFromEpisode :: Episode -> ResponseValue
+characterHandler :: CharacterID -> ValueResolver
+characterHandler characterID _args = do
+  character <- dataFetch $ FetchCharacter characterID
+  return $ responseValueFromCharacter character
+
+responseValueFromEpisode :: Episode -> ResolvedValue
 responseValueFromEpisode Episode{..} = RObject $ HashMap.fromList
-  [ ("name", RScalar $ SString $ eName)
-  , ("releaseYear", RScalar $ SInt $ fromInteger $ toInteger $ eReleaseYear)
+  [ ("name", knownValue eName)
+  , ("releaseYear", knownValue eReleaseYear)
+  , ("hero", characterHandler eHero)
   ]
 
-heroHandler :: ResolverArguments -> GraphQLHandler KeyResponse
+{-
+type Node = HashMap Text (KeyResolver
+
+-- TODO: constraint
+type ObjectResolver a = GraphQLObjectID a -> GraphQLHandler Node
+
+data ResolvedValue = ResolvedValue
+
+-- TYPED
+-- TODO: constraint
+type KeyResolver = ResolverArguments -> GraphQLHandler Node
+-}
+
+heroHandler :: ValueResolver
 heroHandler args = do
   episodeID <- lookupArgument args "episode" >>= \case
     Just x -> return x
     Nothing -> return NewHope
   episode <- dataFetch $ FetchEpisode episodeID
   character <- dataFetch $ FetchCharacter $ eHero episode
-  return $ ValueResponse $ responseValueFromCharacter character
+  return $ responseValueFromCharacter character
 
-episodeHandler :: ResolverArguments -> GraphQLHandler KeyResponse
+episodeHandler :: ValueResolver
 episodeHandler args = do
   episodeID <- requireArgument args "id"
   episode <- dataFetch $ FetchEpisode episodeID
-  return $ ValueResponse $ responseValueFromEpisode episode
+  return $ responseValueFromEpisode episode
 
 app :: StateStore -> Application
 app stateStore request respond = do
@@ -258,8 +283,9 @@ app stateStore request respond = do
   -- TODO: check the request method (require POST)
 
   _body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
-  --let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
-  let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } } query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
+  -- let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
+  -- let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } } query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
+  let body' = "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name } } }"
 
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
@@ -267,11 +293,11 @@ app stateStore request respond = do
     Right d -> do
       return d
 
-  let rootQuery = NodeHandler $ HashMap.fromList
-                  [ ("me", KeyHandler meHandler)
-                  , ("friend", KeyHandler friendHandler)
-                  , ("hero", KeyHandler heroHandler)
-                  , ("episode", KeyHandler episodeHandler)
+  let rootQuery = HashMap.fromList
+                  [ ("me", meHandler)
+                  , ("friend", friendHandler)
+                  , ("hero", heroHandler)
+                  , ("episode", episodeHandler)
                   ]
   let server = Server rootQuery
   handleRequest server stateStore respond queryDoc
