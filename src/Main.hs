@@ -137,16 +137,21 @@ class GraphQLID id where
 instance GraphQLID UserID where
   fetchByID userID = do
     user <- dataFetch (FetchUser userID)
-    return $ RObject $ responseValueFromUser user
+    return $ RObject $ resolveObject user
 
 instance GraphQLID CharacterID where
   fetchByID characterID = do
     character <- dataFetch (FetchCharacter characterID)
-    return $ responseValueFromCharacter character
+    return $ RObject $ resolveObject character
 
 idHandler :: GraphQLID id => id -> ValueResolver
 -- TODO: assert _args is empty
 idHandler i _args = fetchByID i
+
+listHandler :: GraphQLID id => [id] -> ValueResolver
+listHandler elementIDs _args = do
+  -- TODO: assert _args is empty
+  return $ RList $ fmap idHandler elementIDs
 
 type GraphQLHandler a = GenHaxl () a
 
@@ -240,11 +245,6 @@ handleRequest server stateStore respond doc = do
     [("Content-Type", "application/json")]
     (JSON.encode response)
 
-responseValueFromUser :: User -> ObjectResolver
-responseValueFromUser (User name) = HashMap.fromList
-  [ ("name", knownValue name)
-  ]
-
 meResolver :: ValueResolver
 meResolver = idHandler $ UserID "ME"
 
@@ -253,28 +253,31 @@ friendResolver args = do
   userID <- requireArgument args "id"
   fetchByID (userID :: UserID)
 
-listHandler :: GraphQLID id => [id] -> ValueResolver
-listHandler elementIDs _args = do
-  -- TODO: assert _args is empty
-  return $ RList $ fmap idHandler elementIDs
-
-responseValueFromCharacter :: Character -> ResolvedValue
-responseValueFromCharacter Character{..} = RObject $ HashMap.fromList
-  [ ("name", knownValue cName)
-  , ("friends", listHandler cFriends)
-  ]
-
 characterResolver :: CharacterID -> ValueResolver
 characterResolver characterID _args = do
   character <- dataFetch $ FetchCharacter characterID
-  return $ responseValueFromCharacter character
+  return $ RObject $ resolveObject character
 
-responseValueFromEpisode :: Episode -> ResolvedValue
-responseValueFromEpisode Episode{..} = RObject $ HashMap.fromList
-  [ ("name", knownValue eName)
-  , ("releaseYear", knownValue eReleaseYear)
-  , ("hero", characterResolver eHero)
-  ]
+class GraphQLObject a where
+  resolveObject :: a -> ObjectResolver
+
+instance GraphQLObject User where
+  resolveObject (User name) = HashMap.fromList
+    [ ("name", knownValue name)
+    ]
+
+instance GraphQLObject Character where
+  resolveObject Character{..} = HashMap.fromList
+    [ ("name", knownValue cName)
+    , ("friends", listHandler cFriends)
+    ]
+
+instance GraphQLObject Episode where
+  resolveObject Episode{..} = HashMap.fromList
+    [ ("name", knownValue eName)
+    , ("releaseYear", knownValue eReleaseYear)
+    , ("hero", characterResolver eHero)
+    ]
 
 heroResolver :: ValueResolver
 heroResolver args = do
@@ -283,13 +286,13 @@ heroResolver args = do
     Nothing -> return NewHope
   episode <- dataFetch $ FetchEpisode episodeID
   character <- dataFetch $ FetchCharacter $ eHero episode
-  return $ responseValueFromCharacter character
+  return $ RObject $ resolveObject character
 
 episodeResolver :: ValueResolver
 episodeResolver args = do
   episodeID <- requireArgument args "id"
   episode <- dataFetch $ FetchEpisode episodeID
-  return $ responseValueFromEpisode episode
+  return $ RObject $ resolveObject episode
 
 app :: StateStore -> Application
 app stateStore request respond = do
@@ -299,7 +302,7 @@ app stateStore request respond = do
   _body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
   -- let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
   -- let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } } query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
-  let body' = "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name friends { name } } } }"
+  let body' = "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name, friends { name } } } }"
 
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
