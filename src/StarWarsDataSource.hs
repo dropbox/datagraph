@@ -86,7 +86,7 @@ instance Show1 StarWarsRequest where
 
 instance DataSource () StarWarsRequest where
   fetch (StarWarsState conn) _ _ reqs = SyncFetch $ do
-    --putStrLn $ "fetch star wars batch of size " ++ show (length reqs) ++ ": " ++ show [show1 req | BlockedFetch req _var <- reqs]
+    putStrLn $ "fetch star wars batch of size " ++ show (length reqs) ++ ": " ++ show [show1 req | BlockedFetch req _var <- reqs]
     actions <- runRedis conn $ do
       forM reqs $ \(BlockedFetch req var) -> do
         runStarWarsRequest req var

@@ -118,13 +118,43 @@ type QueryRoot {
 }
 -}
 
+class KnownValue v where
+  encodeKnownValue :: v -> ResolvedValue
+
+instance KnownValue Text where
+  encodeKnownValue = RScalar . SString
+
+instance KnownValue Int where
+  encodeKnownValue = RScalar . SInt . fromInteger . toInteger
+
+knownValue :: KnownValue v => v -> ValueResolver
+-- TODO: assert _args is empty
+knownValue v _args = return $ encodeKnownValue v
+
+class GraphQLID id where
+  fetchByID :: id -> GraphQLHandler ResolvedValue
+
+instance GraphQLID UserID where
+  fetchByID userID = do
+    user <- dataFetch (FetchUser userID)
+    return $ RObject $ responseValueFromUser user
+
+instance GraphQLID CharacterID where
+  fetchByID characterID = do
+    character <- dataFetch (FetchCharacter characterID)
+    return $ responseValueFromCharacter character
+
+idHandler :: GraphQLID id => id -> ValueResolver
+-- TODO: assert _args is empty
+idHandler i _args = fetchByID i
+
 type GraphQLHandler a = GenHaxl () a
 
 data ResolvedValue
   = RNull
   | RScalar Scalar
   | RList [ValueResolver]
-  | RObject (HashMap Text ValueResolver)
+  | RObject ObjectResolver
 type ValueResolver = ResolverArguments -> GraphQLHandler ResolvedValue
 
 data FullyResolvedValue
@@ -164,7 +194,7 @@ processSelectionSet :: ObjectResolver -> AST.SelectionSet -> GraphQLHandler (Has
 processSelectionSet objectResolver selectionSet = do
   fmap HashMap.fromList $ forM selectionSet $ \case
     AST.SelectionField (AST.Field alias name arguments _directives innerSelectionSet) -> do
-      traceShowM $ name
+      -- traceShowM $ name
       valueResolver <- case HashMap.lookup name objectResolver of
         Just vr -> return vr
         Nothing -> fail $ "Requested unknown field: " ++ Text.unpack name
@@ -173,8 +203,18 @@ processSelectionSet objectResolver selectionSet = do
       outputValue <- valueResolver args >>= \case
         RNull -> return FNull
         RScalar s -> return $ FScalar s
-        RList _ls -> do
-          fail "TODO: lists don't work"
+        RList ls -> do
+          if null innerSelectionSet then do
+            fail "TODO: lists without selection sets are unsupported"
+          else do
+            elements <- for ls $ \elementResolver -> do
+              element <- elementResolver HashMap.empty >>= \case
+                RObject elementObjectResolver -> do
+                  processSelectionSet elementObjectResolver innerSelectionSet
+                _ -> do
+                  fail "Selecting fields from lists requires that all element values be lists"
+              return (FObject element :: FullyResolvedValue)
+            return (FList elements :: FullyResolvedValue)
         RObject o -> do
           if null innerSelectionSet then do
             fail "Must select fields out of object"
@@ -185,10 +225,8 @@ processSelectionSet objectResolver selectionSet = do
 
 handleRequest :: Server -> StateStore -> (Response -> IO b) -> AST.Document -> IO b
 handleRequest server stateStore respond doc = do
-  -- TODO: bad bad bad
   let (AST.Document defns) = doc
   let queries = [node | AST.DefinitionOperation (AST.Query node) <- defns]
-  --putStrLn $ show queries
 
   requestEnv <- initEnv stateStore ()
   outputs <- runHaxl requestEnv $ do
@@ -201,31 +239,6 @@ handleRequest server stateStore respond doc = do
     status200
     [("Content-Type", "application/json")]
     (JSON.encode response)
-
-class KnownValue v where
-  encodeKnownValue :: v -> ResolvedValue
-
-instance KnownValue Text where
-  encodeKnownValue = RScalar . SString
-
-instance KnownValue Int where
-  encodeKnownValue = RScalar . SInt . fromInteger . toInteger
-
-knownValue :: KnownValue v => v -> ValueResolver
--- TODO: assert _args is empty
-knownValue v _args = return $ encodeKnownValue v
-
-class GraphQLID id where
-  fetchByID :: id -> GraphQLHandler ResolvedValue
-
-instance GraphQLID UserID where
-  fetchByID userID = do
-    user <- dataFetch (FetchUser userID)
-    return $ RObject $ responseValueFromUser user
-
-idHandler :: GraphQLID id => id -> ValueResolver
--- TODO: assert _args is empty
-idHandler i _args = fetchByID i
 
 responseValueFromUser :: User -> ObjectResolver
 responseValueFromUser (User name) = HashMap.fromList
@@ -240,9 +253,15 @@ friendResolver args = do
   userID <- requireArgument args "id"
   fetchByID (userID :: UserID)
 
+listHandler :: GraphQLID id => [id] -> ValueResolver
+listHandler elementIDs _args = do
+  -- TODO: assert _args is empty
+  return $ RList $ fmap idHandler elementIDs
+
 responseValueFromCharacter :: Character -> ResolvedValue
 responseValueFromCharacter Character{..} = RObject $ HashMap.fromList
   [ ("name", knownValue cName)
+  , ("friends", listHandler cFriends)
   ]
 
 characterResolver :: CharacterID -> ValueResolver
@@ -280,7 +299,7 @@ app stateStore request respond = do
   _body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
   -- let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
   -- let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } } query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
-  let body' = "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name } } }"
+  let body' = "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name friends { name } } } }"
 
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
