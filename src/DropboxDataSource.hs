@@ -52,7 +52,7 @@ instance Hashable (UserRequest a) where
   hashWithSalt salt (FetchUser userId) = hashWithSalt salt (0 :: Int, userId)
 
 instance StateKey UserRequest where
-  data State UserRequest = NoStateE
+  data State UserRequest = UserRequestState
 
 instance DataSource () UserRequest where
   fetch _ _ _ reqs = SyncFetch $ do

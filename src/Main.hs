@@ -100,6 +100,7 @@ episodeResolver args = do
 
 data Server = Server
   { rootQuery :: ObjectResolver
+  , rootMutation :: ObjectResolver
   }
 
 data QueryBatch
@@ -127,18 +128,16 @@ handleRequest server stateStore respond doc = do
   let operations = [op | AST.DefinitionOperation op <- defns]
   let groups = groupQueries operations
 
-  outputs <- for groups $ \case
-    QueryBatch queries -> do
-      requestEnv <- initEnv stateStore ()
-      runHaxl requestEnv $ do
+  outputs <- for groups $ \group -> do
+    requestEnv <- initEnv stateStore ()
+    runHaxl requestEnv $ case group of
+      QueryBatch queries -> do
         for queries $ \(AST.Node name [] [] selectionSet) -> do
           output <- processSelectionSet (rootQuery server) selectionSet
           return (name, output)
-    SingleMutation mutation -> do
-      requestEnv <- initEnv stateStore ()
-      runHaxl requestEnv $ do
+      SingleMutation mutation -> do
         let (AST.Node name [] [] selectionSet) = mutation
-        output <- processSelectionSet (rootQuery server) selectionSet
+        output <- processSelectionSet (rootMutation server) selectionSet
         return [(name, output)]
 
   let response = HashMap.fromList [("data" :: Text, HashMap.fromList $ mconcat outputs )]
@@ -153,9 +152,13 @@ app stateStore request respond = do
   -- TODO: check the request method (require POST)
 
   _body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
-  -- let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
-  let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } } query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
-  --let body' = "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name, friends { name }, appearsIn { releaseYear } } } }"
+
+  let body' = Text.unlines
+        [ "query our_names { me { name }, friend(id: \"10\") { name } }"
+        , "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } }"
+        , "query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
+        , "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name, friends { name }, appearsIn { releaseYear } } } }"
+        ]
 
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
@@ -169,7 +172,9 @@ app stateStore request respond = do
                   , ("hero", heroResolver)
                   , ("episode", episodeResolver)
                   ]
-  let server = Server rootQuery
+  let rootMutation = HashMap.fromList []
+
+  let server = Server rootQuery rootMutation
   handleRequest server stateStore respond queryDoc
 
 main :: IO ()
@@ -177,5 +182,5 @@ main = do
   putStrLn $ "http://localhost:8080/"
 
   conn <- openConnection
-  let stateStore = stateSet conn {-$ stateSet UserRequestState-} stateEmpty
+  let stateStore = stateSet conn $ stateSet UserRequestState $ stateEmpty
   run 8080 $ app stateStore
