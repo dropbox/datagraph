@@ -10,9 +10,15 @@ import Haxl.Core
 import Text.Printf
 import qualified Data.Text as Text
 import Control.Monad (forM_)
+import GraphQL
 
 newtype UserID = UserID Text
   deriving (Show, Eq, Hashable, IsString)
+
+instance GraphQLArgument UserID where
+  decodeInputArgument (IScalar (SString cid)) = Right $ UserID cid
+  decodeInputArgument _ = Left $ "invalid Character ID"
+
 
 data User = User { userName :: Text }
  deriving (Show)

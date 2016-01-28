@@ -7,7 +7,7 @@ import Data.Text (Text)
 import Data.Hashable (Hashable(..))
 import Data.String (IsString)
 import GraphQL
-import Data.Aeson (FromJSON(..), Value(..), (.:), (.:?))
+import Data.Aeson (FromJSON(..), Value(..), (.:))
 import Control.Applicative ((<|>))
 
 -- Episode ID
@@ -55,6 +55,10 @@ instance FromJSON Episode where
 
 newtype CharacterID = CharacterID Text
   deriving (Eq, Show, Hashable, IsString, FromJSON)
+
+instance GraphQLArgument CharacterID where
+  decodeInputArgument (IScalar (SString cid)) = Right $ CharacterID cid
+  decodeInputArgument _ = Left $ "invalid Character ID"
 
 -- Character
 

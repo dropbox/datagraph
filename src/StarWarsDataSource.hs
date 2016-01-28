@@ -6,19 +6,16 @@ import Data.Hashable (Hashable(..))
 import Text.Printf
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
-import qualified Data.HashMap.Strict as HashMap
 import Haxl.Core
-import Control.Monad (void, forM_, forM)
-import Data.Traversable (sequence)
+import Control.Monad (void, forM)
 import Database.Redis
 import Data.ByteString (ByteString)
 import Data.Aeson as JSON
-import Control.Monad.IO.Class (liftIO)
 import Data.ByteString.Lazy (fromStrict)
 import Data.Monoid
 
 import StarWarsModel
-import StarWarsData
+--import StarWarsData
 
 data StarWarsRequest a where
   FetchCharacter :: CharacterID -> StarWarsRequest Character

@@ -21,7 +21,6 @@ import qualified Data.HashMap.Strict as HashMap
 import Haxl.Prelude
 import Haxl.Core
 import Data.Traversable (for)
-import Control.Monad (when)
 
 import GraphQL
 import DropboxDataSource
@@ -174,7 +173,7 @@ processSelectionSet objectResolver selectionSet = do
       outputValue <- valueResolver args >>= \case
         RNull -> return FNull
         RScalar s -> return $ FScalar s
-        RList ls -> do
+        RList _ls -> do
           fail "TODO: lists don't work"
         RObject o -> do
           if null innerSelectionSet then do
@@ -233,21 +232,21 @@ responseValueFromUser (User name) = HashMap.fromList
   [ ("name", knownValue name)
   ]
 
-meHandler :: ValueResolver
-meHandler = idHandler $ UserID "ME"
+meResolver :: ValueResolver
+meResolver = idHandler $ UserID "ME"
 
-friendHandler :: ValueResolver
-friendHandler args = do
-  let (Just (IScalar (SString userID))) = HashMap.lookup "id" args
-  fetchByID $ UserID userID
+friendResolver :: ValueResolver
+friendResolver args = do
+  userID <- requireArgument args "id"
+  fetchByID (userID :: UserID)
 
 responseValueFromCharacter :: Character -> ResolvedValue
 responseValueFromCharacter Character{..} = RObject $ HashMap.fromList
   [ ("name", knownValue cName)
   ]
 
-characterHandler :: CharacterID -> ValueResolver
-characterHandler characterID _args = do
+characterResolver :: CharacterID -> ValueResolver
+characterResolver characterID _args = do
   character <- dataFetch $ FetchCharacter characterID
   return $ responseValueFromCharacter character
 
@@ -255,24 +254,11 @@ responseValueFromEpisode :: Episode -> ResolvedValue
 responseValueFromEpisode Episode{..} = RObject $ HashMap.fromList
   [ ("name", knownValue eName)
   , ("releaseYear", knownValue eReleaseYear)
-  , ("hero", characterHandler eHero)
+  , ("hero", characterResolver eHero)
   ]
 
-{-
-type Node = HashMap Text (KeyResolver
-
--- TODO: constraint
-type ObjectResolver a = GraphQLObjectID a -> GraphQLHandler Node
-
-data ResolvedValue = ResolvedValue
-
--- TYPED
--- TODO: constraint
-type KeyResolver = ResolverArguments -> GraphQLHandler Node
--}
-
-heroHandler :: ValueResolver
-heroHandler args = do
+heroResolver :: ValueResolver
+heroResolver args = do
   episodeID <- lookupArgument args "episode" >>= \case
     Just x -> return x
     Nothing -> return NewHope
@@ -280,8 +266,8 @@ heroHandler args = do
   character <- dataFetch $ FetchCharacter $ eHero episode
   return $ responseValueFromCharacter character
 
-episodeHandler :: ValueResolver
-episodeHandler args = do
+episodeResolver :: ValueResolver
+episodeResolver args = do
   episodeID <- requireArgument args "id"
   episode <- dataFetch $ FetchEpisode episodeID
   return $ responseValueFromEpisode episode
@@ -303,10 +289,10 @@ app stateStore request respond = do
       return d
 
   let rootQuery = HashMap.fromList
-                  [ ("me", meHandler)
-                  , ("friend", friendHandler)
-                  , ("hero", heroHandler)
-                  , ("episode", episodeHandler)
+                  [ ("me", meResolver)
+                  , ("friend", friendResolver)
+                  , ("hero", heroResolver)
+                  , ("episode", episodeResolver)
                   ]
   let server = Server rootQuery
   handleRequest server stateStore respond queryDoc
