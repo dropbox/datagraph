@@ -102,18 +102,46 @@ data Server = Server
   { rootQuery :: ObjectResolver
   }
 
+data QueryBatch
+  = QueryBatch [AST.Node]
+  | SingleMutation AST.Node
+
+data AccumulationState = AccumulationState [AST.Node] [QueryBatch]
+
+flushQueries :: AccumulationState -> [QueryBatch]
+flushQueries (AccumulationState [] batches) = batches
+flushQueries (AccumulationState queries batches) = QueryBatch (reverse queries) : batches
+
+addDefinition :: AccumulationState -> AST.OperationDefinition -> AccumulationState
+addDefinition (AccumulationState queries batches) (AST.Query node) =
+  AccumulationState (node : queries) batches
+addDefinition acc (AST.Mutation node) =
+  AccumulationState [] (SingleMutation node : flushQueries acc)
+
+groupQueries :: [AST.OperationDefinition] -> [QueryBatch]
+groupQueries = reverse . flushQueries . foldl' addDefinition (AccumulationState [] [])
+
 handleRequest :: Server -> StateStore -> (Response -> IO b) -> AST.Document -> IO b
 handleRequest server stateStore respond doc = do
   let (AST.Document defns) = doc
-  let queries = [node | AST.DefinitionOperation (AST.Query node) <- defns]
+  let operations = [op | AST.DefinitionOperation op <- defns]
+  let groups = groupQueries operations
 
-  requestEnv <- initEnv stateStore ()
-  outputs <- runHaxl requestEnv $ do
-    for queries $ \(AST.Node name [] [] selectionSet) -> do
-      output <- processSelectionSet (rootQuery server) selectionSet
-      return (name, output)
+  outputs <- for groups $ \case
+    QueryBatch queries -> do
+      requestEnv <- initEnv stateStore ()
+      runHaxl requestEnv $ do
+        for queries $ \(AST.Node name [] [] selectionSet) -> do
+          output <- processSelectionSet (rootQuery server) selectionSet
+          return (name, output)
+    SingleMutation mutation -> do
+      requestEnv <- initEnv stateStore ()
+      runHaxl requestEnv $ do
+        let (AST.Node name [] [] selectionSet) = mutation
+        output <- processSelectionSet (rootQuery server) selectionSet
+        return [(name, output)]
 
-  let response = HashMap.fromList [("data" :: Text, HashMap.fromList outputs )]
+  let response = HashMap.fromList [("data" :: Text, HashMap.fromList $ mconcat outputs )]
   respond $ responseLBS
     status200
     [("Content-Type", "application/json")]
@@ -126,8 +154,8 @@ app stateStore request respond = do
 
   _body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
   -- let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
-  -- let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } } query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
-  let body' = "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name, friends { name }, appearsIn { releaseYear } } } }"
+  let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } } query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
+  --let body' = "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name, friends { name }, appearsIn { releaseYear } } } }"
 
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
