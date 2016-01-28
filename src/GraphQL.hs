@@ -35,6 +35,10 @@ data InputValue
 class GraphQLArgument a where
   decodeInputArgument :: InputValue -> Either String a
 
+instance GraphQLArgument Int where
+  decodeInputArgument (IScalar (SInt i)) = Right $ fromInteger $ toInteger i
+  decodeInputArgument _ = Left "invalid integer"
+
 type ResolverArguments = HashMap Text InputValue
 
 requireArgument :: (Monad m, GraphQLArgument a) => ResolverArguments -> Text -> m a

@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings, LambdaCase, GADTs, StandaloneDeriving, FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses, TypeFamilies, InstanceSigs, GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE ScopedTypeVariables, RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables, RecordWildCards, PartialTypeSignatures #-}
 
 module Main (main) where
 
@@ -26,6 +26,7 @@ import GraphQLHelpers
 import DropboxDataSource
 import StarWarsModel
 import StarWarsDataSource
+import NumberDataSource
 
 decodeInputValue :: AST.Value -> InputValue
 decodeInputValue = \case
@@ -44,7 +45,7 @@ decodeArgument (AST.Argument name value) = (name, decodeInputValue value)
 
 processSelectionSet :: ObjectResolver -> AST.SelectionSet -> GraphQLHandler (HashMap Text FullyResolvedValue)
 processSelectionSet objectResolver selectionSet = do
-  fmap HashMap.fromList $ forM selectionSet $ \case
+  fmap HashMap.fromList $ for selectionSet $ \case
     AST.SelectionField (AST.Field alias name arguments _directives innerSelectionSet) -> do
       -- traceShowM $ name
       valueResolver <- case HashMap.lookup name objectResolver of
@@ -98,6 +99,17 @@ episodeResolver args = do
   episode <- dataFetch $ FetchEpisode episodeID
   return $ RObject $ resolveObject episode
 
+addToNumberResolver :: ValueResolver
+addToNumberResolver args = do
+  newNumber <- requireArgument args "newNumber"
+  () <- uncachedRequest $ AddToNumber newNumber
+  -- CAREFUL - the () <- above causes ghc to emit a >>= rather than >> which
+  -- is important because >>= guarantees sequencing in haxl but >> runs
+  -- both sides in parallel.  Running in parallel here is a bad deal because
+  -- the fetch needs to happen after the write.
+  newNumberObject <- dataFetch FetchCurrentNumber
+  return $ RObject $ resolveObject newNumberObject
+
 data Server = Server
   { rootQuery :: ObjectResolver
   , rootMutation :: ObjectResolver
@@ -128,17 +140,22 @@ handleRequest server stateStore respond doc = do
   let operations = [op | AST.DefinitionOperation op <- defns]
   let groups = groupQueries operations
 
-  outputs <- for groups $ \group -> do
-    requestEnv <- initEnv stateStore ()
-    runHaxl requestEnv $ case group of
-      QueryBatch queries -> do
+  outputs <- for groups $ \case
+    QueryBatch queries -> do
+      queryEnv <- initEnv stateStore ()
+      runHaxl queryEnv $ do
         for queries $ \(AST.Node name [] [] selectionSet) -> do
           output <- processSelectionSet (rootQuery server) selectionSet
           return (name, output)
-      SingleMutation mutation -> do
-        let (AST.Node name [] [] selectionSet) = mutation
-        output <- processSelectionSet (rootMutation server) selectionSet
-        return [(name, output)]
+    SingleMutation mutation -> do
+      let (AST.Node name [] [] selectionSet) = mutation
+      -- top-level mutations must be executed in order, and clear the cache
+      -- in between
+      maps <- for selectionSet $ \selection -> do
+        mutationEnv <- initEnv stateStore ()
+        runHaxl mutationEnv $ do
+          processSelectionSet (rootMutation server) [selection]
+      return [(name, mconcat $ maps)]
 
   let response = HashMap.fromList [("data" :: Text, HashMap.fromList $ mconcat outputs )]
   respond $ responseLBS
@@ -158,6 +175,7 @@ app stateStore request respond = do
         , "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } }"
         , "query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
         , "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name, friends { name }, appearsIn { releaseYear } } } }"
+        , "mutation numbers { first: addToNumber(newNumber: 1) { theNumber } second: addToNumber(newNumber: 2) { theNumber } third: addToNumber(newNumber: 3) { theNumber } }"
         ]
 
   queryDoc <- case parseOnly (document <* endOfInput) body' of
@@ -167,12 +185,14 @@ app stateStore request respond = do
       return d
 
   let rootQuery = HashMap.fromList
-                  [ ("me", meResolver)
-                  , ("friend", friendResolver)
-                  , ("hero", heroResolver)
-                  , ("episode", episodeResolver)
-                  ]
-  let rootMutation = HashMap.fromList []
+        [ ("me", meResolver)
+        , ("friend", friendResolver)
+        , ("hero", heroResolver)
+        , ("episode", episodeResolver)
+        ]
+  let rootMutation = HashMap.fromList
+        [ ("addToNumber", addToNumberResolver)
+        ]
 
   let server = Server rootQuery rootMutation
   handleRequest server stateStore respond queryDoc
@@ -182,5 +202,6 @@ main = do
   putStrLn $ "http://localhost:8080/"
 
   conn <- openConnection
-  let stateStore = stateSet conn $ stateSet UserRequestState $ stateEmpty
+  nds <- initializeNumberDataSource 0
+  let stateStore = stateSet nds $ stateSet conn $ stateSet UserRequestState $ stateEmpty
   run 8080 $ app stateStore
