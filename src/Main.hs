@@ -21,6 +21,7 @@ import qualified Data.HashMap.Strict as HashMap
 import Haxl.Prelude
 import Haxl.Core
 import Data.Traversable (for)
+import qualified Data.Aeson.Encode.Pretty as JSON
 
 import GraphQL
 import DropboxDataSource
@@ -144,14 +145,19 @@ instance GraphQLID CharacterID where
     character <- dataFetch (FetchCharacter characterID)
     return $ RObject $ resolveObject character
 
-idHandler :: GraphQLID id => id -> ValueResolver
--- TODO: assert _args is empty
-idHandler i _args = fetchByID i
+instance GraphQLID EpisodeID where
+  fetchByID episodeID = do
+    episode <- dataFetch (FetchEpisode episodeID)
+    return $ RObject $ resolveObject episode
 
-listHandler :: GraphQLID id => [id] -> ValueResolver
-listHandler elementIDs _args = do
+idResolver :: GraphQLID id => id -> ValueResolver
+-- TODO: assert _args is empty
+idResolver i _args = fetchByID i
+
+listResolver :: GraphQLID id => [id] -> ValueResolver
+listResolver elementIDs _args = do
   -- TODO: assert _args is empty
-  return $ RList $ fmap idHandler elementIDs
+  return $ RList $ fmap idResolver elementIDs
 
 type GraphQLHandler a = GenHaxl () a
 
@@ -228,35 +234,13 @@ processSelectionSet objectResolver selectionSet = do
       return (if Text.null alias then name else alias, outputValue)
     _ -> fail "unsupported selection"
 
-handleRequest :: Server -> StateStore -> (Response -> IO b) -> AST.Document -> IO b
-handleRequest server stateStore respond doc = do
-  let (AST.Document defns) = doc
-  let queries = [node | AST.DefinitionOperation (AST.Query node) <- defns]
-
-  requestEnv <- initEnv stateStore ()
-  outputs <- runHaxl requestEnv $ do
-    for queries $ \(AST.Node name [] [] selectionSet) -> do
-      output <- processSelectionSet (rootQuery server) selectionSet
-      return (name, output)
-
-  let response = HashMap.fromList [("data" :: Text, HashMap.fromList outputs )]
-  respond $ responseLBS
-    status200
-    [("Content-Type", "application/json")]
-    (JSON.encode response)
-
 meResolver :: ValueResolver
-meResolver = idHandler $ UserID "ME"
+meResolver = idResolver $ UserID "ME"
 
 friendResolver :: ValueResolver
 friendResolver args = do
   userID <- requireArgument args "id"
   fetchByID (userID :: UserID)
-
-characterResolver :: CharacterID -> ValueResolver
-characterResolver characterID _args = do
-  character <- dataFetch $ FetchCharacter characterID
-  return $ RObject $ resolveObject character
 
 class GraphQLObject a where
   resolveObject :: a -> ObjectResolver
@@ -269,14 +253,15 @@ instance GraphQLObject User where
 instance GraphQLObject Character where
   resolveObject Character{..} = HashMap.fromList
     [ ("name", knownValue cName)
-    , ("friends", listHandler cFriends)
+    , ("friends", listResolver cFriends)
+    , ("appearsIn", listResolver cAppearsIn)
     ]
 
 instance GraphQLObject Episode where
   resolveObject Episode{..} = HashMap.fromList
     [ ("name", knownValue eName)
     , ("releaseYear", knownValue eReleaseYear)
-    , ("hero", characterResolver eHero)
+    , ("hero", idResolver eHero)
     ]
 
 heroResolver :: ValueResolver
@@ -294,6 +279,24 @@ episodeResolver args = do
   episode <- dataFetch $ FetchEpisode episodeID
   return $ RObject $ resolveObject episode
 
+
+handleRequest :: Server -> StateStore -> (Response -> IO b) -> AST.Document -> IO b
+handleRequest server stateStore respond doc = do
+  let (AST.Document defns) = doc
+  let queries = [node | AST.DefinitionOperation (AST.Query node) <- defns]
+
+  requestEnv <- initEnv stateStore ()
+  outputs <- runHaxl requestEnv $ do
+    for queries $ \(AST.Node name [] [] selectionSet) -> do
+      output <- processSelectionSet (rootQuery server) selectionSet
+      return (name, output)
+
+  let response = HashMap.fromList [("data" :: Text, HashMap.fromList outputs )]
+  respond $ responseLBS
+    status200
+    [("Content-Type", "application/json")]
+    (JSON.encodePretty response)
+
 app :: StateStore -> Application
 app stateStore request respond = do
   -- TODO: check the request URL
@@ -302,7 +305,7 @@ app stateStore request respond = do
   _body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
   -- let body' = "query our_names { me { name }, friend(id: \"10\") { name } }"
   -- let body' = "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } } query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
-  let body' = "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name, friends { name } } } }"
+  let body' = "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name, friends { name }, appearsIn { releaseYear } } } }"
 
   queryDoc <- case parseOnly (document <* endOfInput) body' of
     Left err -> do
