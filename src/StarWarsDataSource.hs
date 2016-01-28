@@ -1,4 +1,5 @@
-{-# LANGUAGE StandaloneDeriving, GADTs, TypeFamilies, MultiParamTypeClasses, OverloadedStrings, LambdaCase #-}
+{-# LANGUAGE StandaloneDeriving, GADTs, TypeFamilies, MultiParamTypeClasses, OverloadedStrings, LambdaCase, RecordWildCards #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module StarWarsDataSource where
 
@@ -6,6 +7,7 @@ import Data.Hashable (Hashable(..))
 import Text.Printf
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
+import qualified Data.HashMap.Strict as HashMap
 import Haxl.Core
 import Control.Monad (void, forM)
 import Database.Redis
@@ -13,6 +15,8 @@ import Data.ByteString (ByteString)
 import Data.Aeson as JSON
 import Data.ByteString.Lazy (fromStrict)
 import Data.Monoid
+import GraphQL
+import GraphQLHelpers
 
 import StarWarsModel
 --import StarWarsData
@@ -97,3 +101,27 @@ openConnection = do
   putStrLn "Connecting to Redis"
   conn <- connect defaultConnectInfo
   return $ StarWarsState conn
+
+instance GraphQLID CharacterID where
+  fetchByID characterID = do
+    character <- dataFetch (FetchCharacter characterID)
+    return $ RObject $ resolveObject character
+
+instance GraphQLID EpisodeID where
+  fetchByID episodeID = do
+    episode <- dataFetch (FetchEpisode episodeID)
+    return $ RObject $ resolveObject episode
+
+instance GraphQLObject Character where
+  resolveObject Character{..} = HashMap.fromList
+    [ ("name", knownValue cName)
+    , ("friends", listResolver cFriends)
+    , ("appearsIn", listResolver cAppearsIn)
+    ]
+
+instance GraphQLObject Episode where
+  resolveObject Episode{..} = HashMap.fromList
+    [ ("name", knownValue eName)
+    , ("releaseYear", knownValue eReleaseYear)
+    , ("hero", idResolver eHero)
+    ]

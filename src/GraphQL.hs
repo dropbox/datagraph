@@ -8,7 +8,7 @@ import qualified Data.Aeson as JSON
 import Data.HashMap.Strict (HashMap)
 import qualified Data.Text as Text
 import qualified Data.HashMap.Strict as HashMap
-import Data.Proxy
+import Haxl.Core (GenHaxl)
 
 data Scalar
      = SInt Int32
@@ -51,7 +51,33 @@ lookupArgument args argName = do
       Left err -> fail $ "Error decoding argument " ++ Text.unpack argName ++ ": " ++ err
     Nothing -> return Nothing
 
+type GraphQLHandler a = GenHaxl () a
+
+data ResolvedValue
+  = RNull
+  | RScalar Scalar
+  | RList [ValueResolver]
+  | RObject ObjectResolver
+type ValueResolver = ResolverArguments -> GraphQLHandler ResolvedValue
+
+data FullyResolvedValue
+  = FNull
+  | FScalar Scalar
+  | FList [FullyResolvedValue]
+  | FObject (HashMap Text FullyResolvedValue)
+
+instance JSON.ToJSON FullyResolvedValue where
+  toJSON FNull = JSON.Null
+  toJSON (FScalar s) = JSON.toJSON s
+  toJSON (FList l) = JSON.toJSON l
+  toJSON (FObject o) = JSON.toJSON o
+
+type ObjectResolver = HashMap Text ValueResolver
+
+
+
 -- TODO: actually use this
+{-
 class GraphQLEnum a where
   enumName :: Proxy a -> Text
   enumDescription :: Proxy a -> Maybe Text
@@ -59,3 +85,4 @@ class GraphQLEnum a where
   renderValue :: a -> Text
   renderDescription :: a -> Text
   -- TODO: deprecation
+-}

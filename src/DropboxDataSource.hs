@@ -1,4 +1,5 @@
 {-# LANGUAGE StandaloneDeriving, GADTs, TypeFamilies, MultiParamTypeClasses, GeneralizedNewtypeDeriving, OverloadedStrings #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module DropboxDataSource where
 
@@ -6,11 +7,13 @@ import Data.Text (Text)
 import Data.String (IsString)
 import Data.Typeable (Typeable)
 import Data.Hashable
+import qualified Data.HashMap.Strict as HashMap
 import Haxl.Core
 import Text.Printf
 import qualified Data.Text as Text
 import Control.Monad (forM_)
 import GraphQL
+import GraphQLHelpers
 
 newtype UserID = UserID Text
   deriving (Show, Eq, Hashable, IsString)
@@ -56,3 +59,13 @@ instance DataSource () UserRequest where
     putStrLn $ "do some requests: " ++ show (length reqs)
     forM_ reqs $ \(BlockedFetch req var) -> do
       runUserRequest req var
+
+instance GraphQLObject User where
+  resolveObject (User name) = HashMap.fromList
+    [ ("name", knownValue name)
+    ]
+
+instance GraphQLID UserID where
+  fetchByID userID = do
+    user <- dataFetch (FetchUser userID)
+    return $ RObject $ resolveObject user
