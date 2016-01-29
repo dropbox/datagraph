@@ -24,10 +24,10 @@ An experimental project to explore what a GraphQL server with optimal IO concurr
 - redis backend
 - backend IO batching
 - benchmarks
+- mutations, incl. sequencing
 
 # TODO
 
-- mutations, incl. sequencing
 - nullability
 - input coercion
 - eliminate as much haxl / graphql boilerplate as possible
