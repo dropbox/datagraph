@@ -96,8 +96,8 @@ instance DataSource () StarWarsRequest where
         runStarWarsRequest req var
     void $ sequence actions
 
-openConnection :: IO (State StarWarsRequest)
-openConnection = do
+openStarWarsRedisConnection :: IO (State StarWarsRequest)
+openStarWarsRedisConnection = do
   putStrLn "Connecting to Redis"
   conn <- connect defaultConnectInfo
   return $ StarWarsState conn

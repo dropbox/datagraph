@@ -171,7 +171,8 @@ app stateStore request respond = do
   _body <- fmap (decodeUtf8 . toStrict) $ strictRequestBody request
 
   let body' = Text.unlines
-        [ "query our_names { me { name }, friend(id: \"10\") { name } }"
+        [ ""
+        , "query our_names { me { name }, friend(id: \"10\") { name } }"
         , "query HeroNameQuery { newhope_hero: hero(episode: NEWHOPE) { name } empire_hero: hero(episode: EMPIRE) { name } jedi_hero: hero(episode: JEDI) { name } }"
         , "query EpisodeQuery { episode(id: NEWHOPE) { name releaseYear } }"
         , "query newhope_hero_friends { episode(id: NEWHOPE) { hero { name, friends { name }, appearsIn { releaseYear } } } }"
@@ -201,7 +202,7 @@ main :: IO ()
 main = do
   putStrLn $ "http://localhost:8080/"
 
-  conn <- openConnection
+  conn <- openStarWarsRedisConnection
   nds <- initializeNumberDataSource 0
   let stateStore = stateSet nds $ stateSet conn $ stateSet UserRequestState $ stateEmpty
   run 8080 $ app stateStore
